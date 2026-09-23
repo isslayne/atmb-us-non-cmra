@@ -65,6 +65,8 @@ set +a
 cargo run --release --locked
 ```
 
+已有完整 Smarty 结果时，可通过 `USPS_INPUT_CSV=path/to/checks.csv` 仅补充 USPS；此模式不需要 Smarty 凭据。
+
 也可以自行导出 `CREDENTIALS` 或 `SMARTY_AUTH_ID` / `SMARTY_AUTH_TOKEN` 环境变量。程序不会自动读取 `.env`。
 
 ```sh

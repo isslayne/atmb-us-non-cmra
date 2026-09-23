@@ -1,7 +1,7 @@
 use crate::{atmb::model::Mailbox, smarty::AdditionalInfo, usps::UspsResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Record {
     pub name: String,
     pub street: String,
@@ -75,6 +75,31 @@ impl Record {
             usps_raw: usps.raw,
         }
     }
+    pub fn address(&self) -> crate::atmb::model::Address {
+        let (zip, zip4) = self
+            .zip
+            .split_once('-')
+            .map_or((self.zip.as_str(), None), |(a, b)| (a, Some(b.to_owned())));
+        crate::atmb::model::Address {
+            line1: self.street.clone(),
+            line2: self.street2.clone(),
+            city: self.city.clone(),
+            state: self.state.clone(),
+            zip: zip.to_owned(),
+            zip4,
+        }
+    }
+    pub fn set_usps(&mut self, usps: UspsResult) {
+        self.usps_status = usps.status;
+        self.usps_address = usps.address;
+        self.usps_zip5 = usps.zip5;
+        self.usps_zip4 = usps.zip4;
+        self.usps_dpv_confirmation = usps.dpv_confirmation;
+        self.usps_cmra = usps.cmra;
+        self.usps_business = usps.business;
+        self.usps_carrier_route = usps.carrier_route;
+        self.usps_raw = usps.raw;
+    }
     pub fn non_cmra(&self) -> bool {
         matches!(self.detail_status.as_str(), "fetched" | "listing_fallback")
             && self.smarty_status == "matched"
@@ -144,5 +169,18 @@ mod tests {
             reader.headers().unwrap().iter().collect::<Vec<_>>(),
             HEADERS
         );
+        let mut restored: Record = reader.deserialize().next().unwrap().unwrap();
+        assert_eq!(restored.address().zip, "03301");
+        assert_eq!(restored.address().line2, "Unit 2");
+        restored.set_usps(UspsResult {
+            status: "matched".into(),
+            cmra: "Y".into(),
+            zip4: "1234".into(),
+            ..UspsResult::default()
+        });
+        assert_eq!(restored.smarty_status, "matched");
+        assert_eq!(restored.cmra, "N");
+        assert_eq!(restored.usps_cmra, "Y");
+        assert_eq!(restored.usps_zip4, "1234");
     }
 }

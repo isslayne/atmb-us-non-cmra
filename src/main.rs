@@ -39,29 +39,44 @@ async fn run() -> color_eyre::Result<()> {
         "false" => false,
         _ => bail!("USPS_ENABLED must be true or false"),
     };
-    // Validate credentials before spending time crawling.
-    let mut smarty = SmartyClient::new()?;
-    let mut usps = UspsClient::new(interval)?;
-    let mailboxes = ATMBCrawl::new()?.fetch(scope, max_addresses).await?;
-    info!("Fetched {} mailboxes ({})", mailboxes.len(), scope.name());
     let mut records = Vec::new();
     let mut smarty_errors = 0;
     let mut usps_errors = 0;
     let mut detail_errors = 0;
-    for (index, mailbox) in mailboxes.into_iter().enumerate() {
-        info!("Checking #{}: {}", index + 1, mailbox.name);
-        if mailbox.detail_status != "fetched" {
-            detail_errors += 1;
+    if let Ok(path) = std::env::var("USPS_INPUT_CSV") {
+        if !usps_enabled {
+            bail!("USPS_INPUT_CSV requires USPS_ENABLED=true");
         }
-        let smarty_info = smarty.inquire(&mailbox.address).await;
-        let usps_info = if usps_enabled {
-            usps.inquire(&mailbox.address).await
-        } else {
-            UspsResult::status("disabled")
-        };
-        smarty_errors += usize::from(smarty_info.failed());
-        usps_errors += usize::from(usps_info.service_error());
-        records.push(Record::new(mailbox, smarty_info, usps_info));
+        records = load_records(&path, scope)?;
+        let mut usps = UspsClient::new(interval)?;
+        for (index, record) in records.iter_mut().enumerate() {
+            info!("USPS checking #{}: {}", index + 1, record.name);
+            let result = usps.inquire(&record.address()).await;
+            usps_errors += usize::from(result.service_error());
+            detail_errors += usize::from(record.detail_status != "fetched");
+            record.set_usps(result);
+        }
+    } else {
+        // Validate credentials before spending time crawling.
+        let mut smarty = SmartyClient::new()?;
+        let mut usps = UspsClient::new(interval)?;
+        let mailboxes = ATMBCrawl::new()?.fetch(scope, max_addresses).await?;
+        info!("Fetched {} mailboxes ({})", mailboxes.len(), scope.name());
+        for (index, mailbox) in mailboxes.into_iter().enumerate() {
+            info!("Checking #{}: {}", index + 1, mailbox.name);
+            if mailbox.detail_status != "fetched" {
+                detail_errors += 1;
+            }
+            let smarty_info = smarty.inquire(&mailbox.address).await;
+            let usps_info = if usps_enabled {
+                usps.inquire(&mailbox.address).await
+            } else {
+                UspsResult::status("disabled")
+            };
+            smarty_errors += usize::from(smarty_info.failed());
+            usps_errors += usize::from(usps_info.service_error());
+            records.push(Record::new(mailbox, smarty_info, usps_info));
+        }
     }
     records.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     // Limited smoke tests never replace a full scope's published output.
@@ -128,6 +143,21 @@ async fn run() -> color_eyre::Result<()> {
         bail!("Smarty failed for {smarty_errors} addresses; partial results saved for diagnosis, publication blocked");
     }
     Ok(())
+}
+fn load_records(path: &str, scope: Scope) -> color_eyre::Result<Vec<Record>> {
+    let records = csv::Reader::from_path(path)?
+        .deserialize()
+        .collect::<Result<Vec<Record>, _>>()?;
+    if records.is_empty()
+        || records.iter().any(|r| {
+            !scope.includes(&r.state)
+                || r.street.trim().is_empty()
+                || !matches!(r.smarty_status.as_str(), "matched" | "no_match")
+        })
+    {
+        bail!("USPS input must contain complete, in-scope Smarty results");
+    }
+    Ok(records)
 }
 fn save_records<'a>(
     records: impl Iterator<Item = &'a Record>,

@@ -42,8 +42,47 @@ concurrency:
   group: update-us-addresses-dev
   cancel-in-progress: false
 
+env:
+  ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
+  MAX_ADDRESSES: ${{ inputs.max_addresses || '0' }}
+  RESULT_DIR: result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free' }}
+
 jobs:
-  update:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Fetch ATMB and validate with Smarty
+        env:
+          ATMB_HTTP_BACKEND: curl
+          USPS_ENABLED: 'false'
+          CREDENTIALS: ${{ secrets[inputs.credentials_secret || 'CREDENTIALS'] }}
+          SMARTY_AUTH_ID: ${{ secrets[inputs.smarty_auth_id_secret || 'SMARTY_AUTH_ID'] }}
+          SMARTY_AUTH_TOKEN: ${{ secrets[inputs.smarty_auth_token_secret || 'SMARTY_AUTH_TOKEN'] }}
+        run: |
+          rm -rf -- "$RESULT_DIR"
+          ./target/release/atmb-us-physical
+      - name: Save Smarty results for USPS job
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smarty-${{ github.run_id }}
+          path: ${{ env.RESULT_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  usps:
+    needs: fetch
+    if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
     runs-on: windows-latest
     defaults:
       run:
@@ -53,64 +92,66 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: dev
+      - uses: actions/download-artifact@v8
+        with:
+          name: smarty-${{ github.run_id }}
+          path: input
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: actions/setup-node@v7
-        if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
         with:
           node-version: '24'
           cache: npm
       - name: Install USPS browser
-        if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
         run: |
           npm ci
           npx playwright install --with-deps chrome
-      - name: Test
-        run: cargo test --locked
-      - name: Build
-        run: cargo build --release --locked
-      - name: Fetch and validate addresses
+      - run: cargo build --release --locked
+      - name: Query USPS for the same addresses without repeating Smarty calls
         env:
+          USPS_INPUT_CSV: input/checks.csv
+          USPS_ENABLED: 'true'
           USPS_BACKEND: browser
           USPS_CHANNEL: chrome
           USPS_HEADLESS: 'false'
-          ATMB_HTTP_BACKEND: curl
-          ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
-          USPS_ENABLED: ${{ github.event_name != 'workflow_dispatch' || inputs.usps_enabled }}
           USPS_INTERVAL_MS: ${{ inputs.usps_interval_ms || '1000' }}
-          MAX_ADDRESSES: ${{ inputs.max_addresses || '0' }}
-          CREDENTIALS: ${{ secrets[inputs.credentials_secret || 'CREDENTIALS'] }}
-          SMARTY_AUTH_ID: ${{ secrets[inputs.smarty_auth_id_secret || 'SMARTY_AUTH_ID'] }}
-          SMARTY_AUTH_TOKEN: ${{ secrets[inputs.smarty_auth_token_secret || 'SMARTY_AUTH_TOKEN'] }}
         run: |
-          python - <<'PYTHON'
-          import os, pathlib, shutil
-          scope = os.environ['ADDRESS_SCOPE']
-          if scope not in ('tax-free', 'all'):
-              raise SystemExit('Invalid address scope')
-          output = pathlib.Path('result')
-          if os.environ['MAX_ADDRESSES'] != '0':
-              output /= 'smoke'
-          shutil.rmtree(output / scope, ignore_errors=True)
-          PYTHON
-          ./target/release/atmb-us-physical
-      - name: Upload results (including partial diagnostics)
+          rm -rf -- "$RESULT_DIR"
+          ./target/release/atmb-us-physical.exe
+      - name: Save complete results or partial diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: addresses-${{ inputs.address_scope || 'tax-free' }}-${{ github.run_id }}
-          path: |
-            result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free' }}/
+          path: ${{ env.RESULT_DIR }}/
           if-no-files-found: ignore
           retention-days: 30
+
+  publish:
+    needs: [fetch, usps]
+    if: >-
+      always() && needs.fetch.result == 'success' &&
+      (needs.usps.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && !inputs.usps_enabled)) &&
+      (inputs.max_addresses == '' || inputs.max_addresses == '0')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - name: Remove previous results
+        run: rm -rf -- "$RESULT_DIR"
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.usps.result == 'success' && format('addresses-{0}-{1}', env.ADDRESS_SCOPE, github.run_id) || format('smarty-{0}', github.run_id) }}
+          path: ${{ env.RESULT_DIR }}
       - name: Commit complete results to dev
-        if: success() && (inputs.max_addresses == '' || inputs.max_addresses == '0')
-        env:
-          ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- "result/$ADDRESS_SCOPE"
+          git add -- "$RESULT_DIR"
           if git diff --cached --quiet; then
             echo 'Address results are unchanged.'
             exit 0
