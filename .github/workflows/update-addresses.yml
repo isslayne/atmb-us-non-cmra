@@ -1,0 +1,103 @@
+name: Update US addresses
+run-name: Update addresses (${{ inputs.address_scope || 'tax-free' }}) from dev
+on:
+  schedule:
+    # Monday 02:17 UTC / 10:17 Asia/Shanghai and Asia/Singapore.
+    - cron: '17 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      address_scope:
+        description: 'Address scope (tax-free = AK, DE, MT, NH, OR)'
+        type: choice
+        options: [tax-free, all]
+        default: tax-free
+      usps_enabled:
+        description: 'Check addresses with USPS'
+        type: boolean
+        default: true
+      usps_interval_ms:
+        description: 'Delay between USPS requests in milliseconds (0-60000)'
+        type: string
+        default: '1000'
+      max_addresses:
+        description: 'Smoke-test limit; 0 = all selected addresses. Limited runs do not commit results.'
+        type: string
+        default: '0'
+      credentials_secret:
+        description: 'Optional repository Secret NAME containing ID=TOKEN,ID2=TOKEN2 (takes precedence)'
+        type: string
+        default: 'CREDENTIALS'
+      smarty_auth_id_secret:
+        description: 'Repository Secret NAME for Smarty auth ID (do not enter credentials here)'
+        type: string
+        default: 'SMARTY_AUTH_ID'
+      smarty_auth_token_secret:
+        description: 'Repository Secret NAME for Smarty auth token (do not enter credentials here)'
+        type: string
+        default: 'SMARTY_AUTH_TOKEN'
+
+permissions:
+  contents: write
+concurrency:
+  group: update-us-addresses-dev
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Fetch and validate addresses
+        env:
+          ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
+          USPS_ENABLED: ${{ github.event_name != 'workflow_dispatch' || inputs.usps_enabled }}
+          USPS_INTERVAL_MS: ${{ inputs.usps_interval_ms || '1000' }}
+          MAX_ADDRESSES: ${{ inputs.max_addresses || '0' }}
+          CREDENTIALS: ${{ secrets[inputs.credentials_secret || 'CREDENTIALS'] }}
+          SMARTY_AUTH_ID: ${{ secrets[inputs.smarty_auth_id_secret || 'SMARTY_AUTH_ID'] }}
+          SMARTY_AUTH_TOKEN: ${{ secrets[inputs.smarty_auth_token_secret || 'SMARTY_AUTH_TOKEN'] }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, pathlib, shutil
+          scope = os.environ['ADDRESS_SCOPE']
+          if scope not in ('tax-free', 'all'):
+              raise SystemExit('Invalid address scope')
+          output = pathlib.Path('result')
+          if os.environ['MAX_ADDRESSES'] != '0':
+              output /= 'smoke'
+          shutil.rmtree(output / scope, ignore_errors=True)
+          PYTHON
+          ./target/release/atmb-us-physical
+      - name: Upload results (including partial diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: addresses-${{ inputs.address_scope || 'tax-free' }}-${{ github.run_id }}
+          path: |
+            result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free' }}/
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Commit complete results to dev
+        if: success() && (inputs.max_addresses == '' || inputs.max_addresses == '0')
+        env:
+          ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "result/$ADDRESS_SCOPE"
+          if git diff --cached --quiet; then
+            echo 'Address results are unchanged.'
+            exit 0
+          fi
+          git commit -m "data: update $ADDRESS_SCOPE US addresses"
+          git pull --rebase origin dev
+          git push origin HEAD:dev

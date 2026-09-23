@@ -1,221 +1,151 @@
-use std::cell::RefCell;
-use color_eyre::eyre::{bail, eyre};
-use serde::{Deserialize, Serialize};
-use smarty_rust_sdk::sdk::authentication::SecretKeyCredential;
-use smarty_rust_sdk::sdk::batch::Batch;
-use smarty_rust_sdk::sdk::options::{Options, OptionsBuilder};
-use smarty_rust_sdk::us_street_api::client::USStreetAddressClient;
-use smarty_rust_sdk::us_street_api::lookup::{Lookup, MatchStrategy};
 use crate::atmb::model::Address;
-use crate::utils::retry_wrapper;
+use color_eyre::eyre::{bail, eyre};
+use reqwest::Client;
+use serde_json::Value;
+use std::time::Duration;
 
-/// A free trial account is limited to 1000 lookups per month.
-/// So we use multiple accounts to avoid the limitation.
-///
-/// As there are ~1700 atmb location currently, we need at least 2 accounts.
-pub struct SmartyClientProxy {
-    clients: Vec<SmartyClient>,
-    state: RefCell<Vec<ClientState>>,
+pub struct SmartyClient {
+    client: Client,
+    credentials: Vec<(String, String)>,
+    current: usize,
 }
-
-impl SmartyClientProxy {
-    pub fn new() -> color_eyre::Result<Self> {
-        let credentials = Self::credentials();
-        let clients = credentials.into_iter()
-            .map(|(id, secret)| SmartyClient::new(id, secret))
-            .collect::<Result<Vec<_>, _>>()?;
-        let state = clients.iter().map(|_| ClientState::default()).collect();
-        Ok(
-            Self {
-                clients,
-                state: RefCell::new(state),
-            }
-        )
-    }
-
-    pub async fn inquire_address(&self, address: Address) -> color_eyre::Result<AdditionalInfo> {
-        let client = self.next_client();
-        client.inquire_address(address).await
-    }
-
-    fn next_client(&self) -> &SmartyClient {
-        let idx = self.get_client_id();
-        self.update_state(idx);
-        &self.clients[idx]
-    }
-
-    /// get the index of a client that is not exceeded
-    fn get_client_id(&self) -> usize {
-        self.state.borrow().iter().enumerate().find(|(_, state)| !state.is_exceeded())
-            .map(|(id, _)| id)
-            .expect("all clients are exceeded")
-    }
-
-    fn update_state(&self, idx: usize) {
-        let mut state = self.state.borrow_mut();
-        state[idx].lookups += 1;
-    }
-
-    /// load authentication credentials from environment variables
-    ///
-    /// CREDENTIALS=`ID1`=`SECRET1`[,`ID2`=`SECRET2`]*
-    fn credentials() -> Vec<(String, String)> {
-        std::env::var("CREDENTIALS")
-            .map(|credentials| {
-                credentials.split(',')
-                    .map(|pair| {
-                        let mut iter = pair.split('=');
-                        (iter.next().unwrap().to_string(), iter.next().unwrap().to_string())
-                    })
-                    .collect()
-            })
-            .expect("`CREDENTIALS` environment variable must be set")
-    }
-}
-
-#[derive(Default)]
-struct ClientState {
-    lookups: u32,
-}
-
-impl ClientState {
-    fn is_exceeded(&self) -> bool {
-        self.lookups > 1000
-    }
-}
-
-struct SmartyClient {
-    client: USStreetAddressClient,
-}
-
-impl SmartyClient {
-    fn new(auth_id: impl Into<String>, auth_token: impl Into<String>) -> color_eyre::Result<Self> {
-        Ok(
-            Self {
-                client: USStreetAddressClient::new(Self::options(auth_id, auth_token))?,
-            }
-        )
-    }
-
-    async fn inquire_address(&self, address: Address) -> color_eyre::Result<AdditionalInfo> {
-        retry_wrapper(3, || async {
-            self._inquire_address(address.clone()).await
-        }).await
-    }
-
-    async fn _inquire_address(&self, address: Address) -> color_eyre::Result<AdditionalInfo> {
-        let mut batch = Batch::default();
-        batch.push(Lookup::from(address))?;
-        self.client.send(&mut batch).await?;
-        let resp = batch.records().into_iter().next()
-            .ok_or_else(|| eyre!("no response from Smarty"))?;
-        resp.clone().try_into()
-    }
-
-    fn authentication(auth_id: impl Into<String>, auth_token: impl Into<String>) -> Box<SecretKeyCredential> {
-        SecretKeyCredential::new(
-            auth_id.into(),
-            auth_token.into(),
-        )
-    }
-
-    fn options(auth_id: impl Into<String>, auth_token: impl Into<String>) -> Options {
-        OptionsBuilder::new(Some(Self::authentication(auth_id, auth_token)))
-            .with_license("us-core-cloud")
-            .with_retries(3)
-            .build()
-    }
-}
-
-impl From<Address> for Lookup {
-    fn from(address: Address) -> Self {
-        Self {
-            zipcode: address.full_zip(),
-            street: address.line1,
-            city: address.city,
-            state: address.state,
-            match_strategy: MatchStrategy::Enhanced,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AdditionalInfo {
-    pub cmra: YesOrNo,
-    pub rdi: Rdi,
+    pub status: String,
+    pub cmra: String,
+    pub rdi: String,
 }
-
-#[derive(Debug, PartialEq, Eq, Serialize, Ord, PartialOrd)]
-#[serde(rename_all = "PascalCase")]
-#[repr(u8)]
-pub enum Rdi {
-    Residential,
-    Commercial,
-    Unknown,
-}
-
-impl TryFrom<String> for Rdi {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "residential" => Ok(Rdi::Residential),
-            "commercial" => Ok(Rdi::Commercial),
-            "" => Ok(Rdi::Unknown),
-            _ => Err(value),
-        }
-    }
-}
-
-impl AdditionalInfo {
-    pub fn is_cmra(&self) -> bool {
-        self.cmra == YesOrNo::Y
-    }
-
-    pub fn is_residential(&self) -> bool {
-        self.rdi == Rdi::Residential
-    }
-}
-
-impl TryFrom<Lookup> for AdditionalInfo {
-    type Error = color_eyre::eyre::Error;
-
-    fn try_from(lookup: Lookup) -> Result<Self, Self::Error> {
-        if lookup.results.is_empty() {
-            bail!("no results found: {:?}", lookup);
-        }
-        let candidate = lookup.results
-            .into_iter()
-            .next()
-            .unwrap();
-
-        Ok(
-            Self {
-                cmra: YesOrNo::try_from(candidate.analysis.dpv_cmra)
-                    .map_err(|e| eyre!("failed to parse CMRA: {}", e))?,
-                rdi: Rdi::try_from(candidate.metadata.rdi)
-                    .map_err(|e| eyre!("failed to parse RDI: {}", e))?,
+impl SmartyClient {
+    pub fn new() -> color_eyre::Result<Self> {
+        let raw = std::env::var("CREDENTIALS").unwrap_or_default();
+        let credentials = if !raw.trim().is_empty() {
+            parse_credentials(&raw)?
+        } else {
+            let id = std::env::var("SMARTY_AUTH_ID").unwrap_or_default();
+            let token = std::env::var("SMARTY_AUTH_TOKEN").unwrap_or_default();
+            if id.trim().is_empty() || token.trim().is_empty() {
+                bail!("Set CREDENTIALS or both SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN");
             }
-        )
+            vec![(id.trim().to_owned(), token.trim().to_owned())]
+        };
+        Ok(Self {
+            client: Client::builder().timeout(Duration::from_secs(30)).build()?,
+            credentials,
+            current: 0,
+        })
+    }
+    pub async fn inquire(&mut self, address: &Address) -> AdditionalInfo {
+        while self.current < self.credentials.len() {
+            let (id, token) = &self.credentials[self.current];
+            for attempt in 0..3 {
+                let response = self
+                    .client
+                    .get("https://us-street.api.smarty.com/street-address")
+                    .query(&[
+                        ("auth-id", id.as_str()),
+                        ("auth-token", token.as_str()),
+                        ("street", &address.line1),
+                        ("street2", &address.line2),
+                        ("city", &address.city),
+                        ("state", &address.state),
+                        ("zipcode", &address.zip),
+                        ("match", "enhanced"),
+                        ("candidates", "1"),
+                    ])
+                    .send()
+                    .await;
+                match response {
+                    Ok(response) => {
+                        let status = response.status();
+                        if status.as_u16() == 402 {
+                            self.current += 1;
+                            break;
+                        }
+                        if (status.is_server_error() || status.as_u16() == 429) && attempt < 2 {
+                            tokio::time::sleep(Duration::from_secs(2 * (attempt + 1))).await;
+                            continue;
+                        }
+                        if !status.is_success() {
+                            return AdditionalInfo::error(format!("http_{}", status.as_u16()));
+                        }
+                        return match response.json::<Value>().await {
+                            Ok(value) => parse_response(value),
+                            Err(_) => AdditionalInfo::error("invalid_json"),
+                        };
+                    }
+                    Err(_) if attempt < 2 => {
+                        tokio::time::sleep(Duration::from_secs(2 * (attempt + 1))).await
+                    }
+                    Err(_) => return AdditionalInfo::error("network_error"),
+                }
+            }
+        }
+        AdditionalInfo::error("quota_exhausted")
     }
 }
-
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum YesOrNo {
-    N,
-    Y,
-}
-
-impl TryFrom<String> for YesOrNo {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.to_lowercase().as_str() {
-            "y" => Ok(YesOrNo::Y),
-            "n" => Ok(YesOrNo::N),
-            _ => Err(value),
+impl AdditionalInfo {
+    pub fn error(status: impl Into<String>) -> Self {
+        Self {
+            status: status.into(),
+            ..Self::default()
         }
+    }
+    pub fn failed(&self) -> bool {
+        !matches!(self.status.as_str(), "matched" | "no_match")
+    }
+}
+fn parse_credentials(raw: &str) -> color_eyre::Result<Vec<(String, String)>> {
+    raw.split(',')
+        .map(|pair| {
+            let (id, token) = pair.trim().split_once('=').ok_or_else(|| {
+                eyre!("CREDENTIALS must contain ID=TOKEN pairs separated by commas")
+            })?;
+            if id.trim().is_empty() || token.trim().is_empty() {
+                bail!("CREDENTIALS contains an empty ID or TOKEN");
+            }
+            Ok((id.trim().into(), token.trim().into()))
+        })
+        .collect()
+}
+fn parse_response(value: Value) -> AdditionalInfo {
+    let Some(candidates) = value.as_array() else {
+        return AdditionalInfo::error("invalid_response");
+    };
+    let Some(candidate) = candidates.first() else {
+        return AdditionalInfo::error("no_match");
+    };
+    AdditionalInfo {
+        status: "matched".into(),
+        cmra: candidate
+            .pointer("/analysis/dpv_cmra")
+            .and_then(Value::as_str)
+            .filter(|v| matches!(*v, "Y" | "N"))
+            .unwrap_or("Unknown")
+            .into(),
+        rdi: candidate
+            .pointer("/metadata/rdi")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("Unknown")
+            .into(),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn credentials_are_validated_without_echoing_secrets() {
+        assert_eq!(parse_credentials(" a=b, c=d ").unwrap().len(), 2);
+        for raw in ["", "sensitive-value", "a=", "=b", "a=b,"] {
+            let message = parse_credentials(raw).unwrap_err().to_string();
+            assert!(!message.contains("sensitive-value"));
+        }
+    }
+    #[test]
+    fn unknown_is_not_non_cmra() {
+        let result = parse_response(serde_json::json!([{"analysis": {}, "metadata": {}}]));
+        assert_eq!(result.cmra, "Unknown");
+        assert_eq!(parse_response(serde_json::json!([])).status, "no_match");
+        assert!(parse_response(serde_json::json!({"error":"bad"})).failed());
     }
 }
