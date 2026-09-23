@@ -74,7 +74,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_USPS_ENABLED: ${{ inputs.usps_enabled }}
         run: |
+          [[ "$RESUME_USPS_ENABLED" == true ]] || { echo "Resume mode requires USPS enabled"; exit 1; }
           [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
           [[ "$(gh run view "$RESUME_RUN_ID" --json headBranch --jq .headBranch)" == dev ]] || exit 1
           rm -rf -- "$RESULT_DIR"

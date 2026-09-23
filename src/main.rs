@@ -48,6 +48,9 @@ async fn run() -> color_eyre::Result<()> {
             bail!("USPS_INPUT_CSV requires USPS_ENABLED=true");
         }
         records = load_records(&path, scope)?;
+        if max_addresses > 0 {
+            records.truncate(max_addresses);
+        }
         let mut usps = UspsClient::new(interval)?;
         for (index, record) in records.iter_mut().enumerate() {
             info!("USPS checking #{}: {}", index + 1, record.name);
