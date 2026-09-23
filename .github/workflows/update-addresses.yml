@@ -44,7 +44,10 @@ concurrency:
 
 jobs:
   update:
-    runs-on: macos-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
@@ -80,7 +83,7 @@ jobs:
           SMARTY_AUTH_ID: ${{ secrets[inputs.smarty_auth_id_secret || 'SMARTY_AUTH_ID'] }}
           SMARTY_AUTH_TOKEN: ${{ secrets[inputs.smarty_auth_token_secret || 'SMARTY_AUTH_TOKEN'] }}
         run: |
-          python3 - <<'PYTHON'
+          python - <<'PYTHON'
           import os, pathlib, shutil
           scope = os.environ['ADDRESS_SCOPE']
           if scope not in ('tax-free', 'all'):
