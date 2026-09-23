@@ -44,6 +44,7 @@ async function lookup(address) {
 if (process.argv.includes('--smoke')) {
   try {
     for (const address of [
+      { line1: '14845 SW Murray Scholls Dr', line2: 'Ste 110', city: 'Beaverton', state: 'OR', zip: '97007' },
       { line1: '5953 Mabel Rd', line2: 'unit-236', city: 'Las Vegas', state: 'NV', zip: '89110' },
       { line1: '243 E 5th Ave', line2: '', city: 'Anchorage', state: 'AK', zip: '99501' },
     ]) {
