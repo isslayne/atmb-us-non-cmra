@@ -4,7 +4,10 @@ permissions:
   contents: read
 jobs:
   usps:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -14,8 +17,15 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chrome
       - name: Verify USPS sample through normal browser form
-        run: xvfb-run --auto-servernum npm run test:usps-live
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run --auto-servernum npm run test:usps-live
+          else
+            npm run test:usps-live
+          fi
         env:
           USPS_HEADLESS: 'false'
+          USPS_CHANNEL: chrome
