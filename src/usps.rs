@@ -39,7 +39,7 @@ impl BrowserWorker {
             .await?;
         self.input.flush().await?;
         let mut output = String::new();
-        tokio::time::timeout(Duration::from_secs(120), self.output.read_line(&mut output))
+        tokio::time::timeout(Duration::from_secs(240), self.output.read_line(&mut output))
             .await??;
         Ok(serde_json::from_str(&output)?)
     }
@@ -80,6 +80,12 @@ pub struct UspsClient {
     consecutive_errors: usize,
 }
 impl UspsClient {
+    pub async fn close(&mut self) {
+        if let Some(mut worker) = self.browser.take() {
+            let _ = worker.input.shutdown().await;
+            let _ = tokio::time::timeout(Duration::from_secs(15), worker._child.wait()).await;
+        }
+    }
     pub fn new(interval_ms: usize) -> color_eyre::Result<Self> {
         let browser_mode = match std::env::var("USPS_BACKEND")
             .unwrap_or_else(|_| "browser".into())

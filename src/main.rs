@@ -28,7 +28,7 @@ async fn main() {
 }
 async fn run() -> color_eyre::Result<()> {
     let scope =
-        Scope::parse(&std::env::var("ADDRESS_SCOPE").unwrap_or_else(|_| "tax-free".into()))?;
+        Scope::parse(&std::env::var("ADDRESS_SCOPE").unwrap_or_else(|_| "tax-free-nv".into()))?;
     let max_addresses = bounded_env("MAX_ADDRESSES", 0, 0, 100_000)?;
     let interval = bounded_env("USPS_INTERVAL_MS", 1000, 0, 60_000)?;
     let usps_enabled = match std::env::var("USPS_ENABLED")
@@ -59,6 +59,7 @@ async fn run() -> color_eyre::Result<()> {
             detail_errors += usize::from(record.detail_status != "fetched");
             record.set_usps(result);
         }
+        usps.close().await;
     } else {
         // Validate credentials before spending time crawling.
         let mut smarty = SmartyClient::new()?;
@@ -80,6 +81,7 @@ async fn run() -> color_eyre::Result<()> {
             usps_errors += usize::from(usps_info.service_error());
             records.push(Record::new(mailbox, smarty_info, usps_info));
         }
+        usps.close().await;
     }
     records.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     // Limited smoke tests never replace a full scope's published output.
@@ -151,6 +153,9 @@ async fn run() -> color_eyre::Result<()> {
     }
     if smarty_errors > 0 {
         bail!("Smarty failed for {smarty_errors} addresses; partial results saved for diagnosis, publication blocked");
+    }
+    if detail_errors > 0 {
+        bail!("ATMB detail fetch failed for {detail_errors} addresses; diagnostic listings saved, publication blocked until all units are confirmed");
     }
     Ok(())
 }

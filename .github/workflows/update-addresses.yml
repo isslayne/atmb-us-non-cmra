@@ -1,5 +1,5 @@
 name: Update US addresses
-run-name: Update addresses (${{ inputs.address_scope || 'tax-free' }}) from dev
+run-name: Update addresses (${{ inputs.address_scope || 'tax-free-nv' }}) from dev
 on:
   schedule:
     # Monday 02:17 UTC / 10:17 Asia/Shanghai and Asia/Singapore.
@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       address_scope:
-        description: 'Address scope (tax-free = AK, DE, MT, NH, OR)'
+        description: 'Default: AK, DE, MT, NH, OR plus NV; tax-free excludes NV'
         type: choice
-        options: [tax-free, all]
-        default: tax-free
+        options: [tax-free-nv, tax-free, all]
+        default: tax-free-nv
       usps_enabled:
         description: 'Check addresses with USPS'
         type: boolean
@@ -52,10 +52,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
+  ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free-nv' }}
   MAX_ADDRESSES: ${{ inputs.max_addresses || '0' }}
   SOURCE_RUN_ID: ${{ inputs.resume_run_id }}
-  RESULT_DIR: result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free' }}
+  RESULT_DIR: result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free-nv' }}
 
 jobs:
   fetch:
@@ -152,7 +152,6 @@ jobs:
           USPS_ENABLED: 'true'
           USPS_PROXY: ${{ secrets[inputs.usps_proxy_secret || 'USPS_PROXY'] }}
           USPS_BACKEND: browser
-          USPS_CHANNEL: chrome
           USPS_HEADLESS: 'false'
           USPS_INTERVAL_MS: ${{ inputs.usps_interval_ms || '1000' }}
         run: |
@@ -162,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: addresses-${{ inputs.address_scope || 'tax-free' }}-${{ github.run_id }}
+          name: addresses-${{ inputs.address_scope || 'tax-free-nv' }}-${{ github.run_id }}
           path: ${{ env.RESULT_DIR }}/
           if-no-files-found: ignore
           retention-days: 30

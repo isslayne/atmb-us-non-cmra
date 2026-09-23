@@ -1,28 +1,20 @@
 // Use USPS's normal web form so its own scripts initialize the session and request.
 // Never import browser profiles, saved cookies, or private user browser data.
-import { chromium } from 'playwright';
+import { chromeSession } from './chrome-session.mjs';
+import { withSessionRecovery } from './session-recovery.mjs';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const PAGE = 'https://tools.usps.com/zip-code-lookup.htm?byaddress';
 const ENDPOINT = 'https://tools.usps.com/tools/app/ziplookup/zipByAddress';
-let browser, context, page, ready = false;
-function proxyConfig() {
-  if (!process.env.USPS_PROXY) return undefined;
-  const url = new URL(process.env.USPS_PROXY);
-  const username = decodeURIComponent(url.username);
-  const password = decodeURIComponent(url.password);
-  url.username = '';
-  url.password = '';
-  return { server: url.origin, ...(username ? { username, password } : {}) };
-}
+let browser, page, ready = false;
 async function initialize() {
   if (browser) return;
-  browser = await chromium.launch({ headless: process.env.USPS_HEADLESS !== 'false', ...(process.env.USPS_CHANNEL ? { channel: process.env.USPS_CHANNEL } : {}), proxy: proxyConfig() });
-  context = await browser.newContext({ locale: 'en-US' });
-  page = await context.newPage();
+  browser = await chromeSession();
+  page = browser.page;
   page.setDefaultTimeout(20000);
 }
-async function lookup(address) {
+async function lookupOnce(address) {
   try {
     await initialize();
     if (!ready) {
@@ -49,6 +41,20 @@ async function lookup(address) {
     ready = false;
     return { error: error.name === 'TimeoutError' ? 'browser_timeout' : 'browser_error' };
   }
+}
+async function lookup(address) {
+  return withSessionRecovery(address, {
+    lookup: lookupOnce,
+    reset: async () => {
+      await browser?.close();
+      browser = undefined;
+      ready = false;
+    },
+    pause: () => delay(3000),
+  });
+}
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => { await browser?.close(); process.exit(0); });
 }
 if (process.argv.includes('--smoke')) {
   try {

@@ -72,25 +72,32 @@ pub fn state_code(value: &str) -> Option<&'static str> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
+    TaxFreeNv,
     TaxFree,
     All,
 }
 impl Scope {
     pub fn parse(value: &str) -> color_eyre::Result<Self> {
         match value {
+            "tax-free-nv" => Ok(Self::TaxFreeNv),
             "tax-free" => Ok(Self::TaxFree),
             "all" => Ok(Self::All),
-            _ => bail!("ADDRESS_SCOPE must be tax-free or all"),
+            _ => bail!("ADDRESS_SCOPE must be tax-free-nv, tax-free or all"),
         }
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::TaxFreeNv => "tax-free-nv",
             Self::TaxFree => "tax-free",
             Self::All => "all",
         }
     }
     pub fn includes(self, state: &str) -> bool {
-        state_code(state).is_some_and(|code| self == Self::All || TAX_FREE_STATES.contains(&code))
+        state_code(state).is_some_and(|code| {
+            self == Self::All
+                || TAX_FREE_STATES.contains(&code)
+                || (self == Self::TaxFreeNv && code == "NV")
+        })
     }
 }
 
@@ -117,9 +124,14 @@ mod tests {
     fn scope_and_abbreviations() {
         for state in TAX_FREE_STATES {
             assert!(Scope::TaxFree.includes(state));
+            assert!(Scope::TaxFreeNv.includes(state));
         }
         assert!(Scope::TaxFree.includes("Oregon"));
         assert!(!Scope::TaxFree.includes("NV"));
+        assert!(Scope::TaxFreeNv.includes("Nevada"));
+        assert!(Scope::TaxFreeNv.includes("NV"));
+        assert!(!Scope::TaxFreeNv.includes("CA"));
+        assert_eq!(Scope::parse("tax-free-nv").unwrap().name(), "tax-free-nv");
         assert!(Scope::All.includes("Nevada"));
         assert!(Scope::All.includes("Guam"));
         assert!(!Scope::TaxFree.includes("PR"));

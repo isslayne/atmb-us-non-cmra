@@ -2,6 +2,12 @@
   "name": "atmb-usps-browser",
   "private": true,
   "type": "module",
-  "dependencies": {"playwright": "1.63.0"},
-  "scripts": {"test:usps-live": "node scripts/usps-browser.mjs --smoke"}
+  "dependencies": {
+    "playwright": "1.63.0",
+    "proxy-chain": "3.0.1"
+  },
+  "scripts": {
+    "test:usps-live": "node scripts/usps-browser.mjs --smoke",
+    "test": "node --test scripts/*.test.mjs"
+  }
 }

@@ -5,7 +5,7 @@ use crate::utils::retry_wrapper;
 use color_eyre::eyre::{bail, eyre};
 use futures::StreamExt;
 use log::info;
-use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, CACHE_CONTROL, PRAGMA, USER_AGENT};
 use reqwest::Client;
 
 pub mod model;
@@ -56,9 +56,21 @@ impl ATMBClient {
         } else {
             &format!("{}{}", BASE_URL, url_path)
         };
+        let revalidate = reqwest::Url::parse(url)?
+            .query_pairs()
+            .any(|(key, _)| key == "_atmb_refresh");
         retry_wrapper(3, || async {
             if self.use_curl {
-                let output = tokio::process::Command::new("curl")
+                let mut command = tokio::process::Command::new("curl");
+                if revalidate {
+                    command.args([
+                        "--header",
+                        "Cache-Control: no-cache",
+                        "--header",
+                        "Pragma: no-cache",
+                    ]);
+                }
+                let output = command
                     .args([
                         "--silent",
                         "--show-error",
@@ -86,14 +98,13 @@ impl ATMBClient {
                 }
                 Ok(String::from_utf8(output.stdout)?)
             } else {
-                Ok(self
-                    .client
-                    .get(url)
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .text()
-                    .await?)
+                let mut request = self.client.get(url);
+                if revalidate {
+                    request = request
+                        .header(CACHE_CONTROL, "no-cache")
+                        .header(PRAGMA, "no-cache");
+                }
+                Ok(request.send().await?.error_for_status()?.text().await?)
             }
         })
         .await
@@ -169,12 +180,12 @@ impl ATMBCrawl {
                     mailbox.detail_status = "fetched".into();
                 }
                 Err(error) => {
-                    log::warn!("Detail unavailable for {}: {error}; using the published state-listing address for validation", mailbox.link);
+                    log::warn!("Detail fetch failed for {}: {error}; using the published state-listing address for validation (this does not mean the location is unavailable)", mailbox.link);
                     mailbox.detail_status = "listing_fallback".into();
                 }
             }
             mailbox
-        }).buffer_unordered(5).collect().await
+        }).buffer_unordered(1).collect().await
     }
 
     async fn fetch_state_pages(
@@ -201,8 +212,8 @@ impl ATMBCrawl {
                         .await
                     }
                 })
-                // limit concurrent requests to 5
-                .buffer_unordered(5)
+                // Request pages sequentially: concurrent origin renders can return empty shells.
+                .buffer_unordered(1)
                 .collect()
                 .await;
 
@@ -258,18 +269,16 @@ mod live_tests {
         let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
         let mailboxes = ATMBCrawl::new()
             .unwrap()
-            .fetch(Scope::TaxFree, 0)
+            .fetch(Scope::TaxFreeNv, 0)
             .await
             .unwrap();
         assert!(mailboxes
             .iter()
-            .all(|m| Scope::TaxFree.includes(&m.address.state)));
-        assert!(mailboxes
-            .iter()
-            .all(|m| matches!(m.detail_status.as_str(), "fetched" | "listing_fallback")));
+            .all(|m| Scope::TaxFreeNv.includes(&m.address.state)));
+        assert!(mailboxes.iter().all(|m| m.detail_status == "fetched"));
         assert!(mailboxes.iter().all(|m| !m.address.line1.is_empty()));
         println!(
-            "Tax-free: {} listings, {} available details",
+            "Tax-free + Nevada: {} listings, {} available details",
             mailboxes.len(),
             mailboxes
                 .iter()
