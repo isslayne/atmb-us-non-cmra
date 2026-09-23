@@ -37,7 +37,7 @@ on:
         default: 'SMARTY_AUTH_TOKEN'
 
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: update-us-addresses-dev
   cancel-in-progress: false
@@ -130,6 +130,8 @@ jobs:
           retention-days: 30
 
   publish:
+    permissions:
+      contents: write
     needs: [fetch, usps]
     if: >-
       always() && needs.fetch.result == 'success' &&
