@@ -19,11 +19,21 @@ const US_HOME_PAGE_URL: &str = "/l/usa";
 /// HTTP client for obtaining information from ATMB
 struct ATMBClient {
     client: Client,
+    use_curl: bool,
 }
 
 impl ATMBClient {
     fn new() -> color_eyre::Result<Self> {
+        let use_curl = match std::env::var("ATMB_HTTP_BACKEND")
+            .unwrap_or_else(|_| "reqwest".into())
+            .as_str()
+        {
+            "curl" => true,
+            "reqwest" => false,
+            _ => bail!("ATMB_HTTP_BACKEND must be curl or reqwest"),
+        };
         Ok(Self {
+            use_curl,
             client: Client::builder()
                 .default_headers(Self::default_headers())
                 .timeout(std::time::Duration::from_secs(30))
@@ -46,16 +56,47 @@ impl ATMBClient {
         } else {
             &format!("{}{}", BASE_URL, url_path)
         };
-        Ok(retry_wrapper(3, || async {
-            self.client
-                .get(url)
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await
+        retry_wrapper(3, || async {
+            if self.use_curl {
+                let output = tokio::process::Command::new("curl")
+                    .args([
+                        "--silent",
+                        "--show-error",
+                        "--fail",
+                        "--location",
+                        "--proto",
+                        "=https",
+                        "--proto-redir",
+                        "=https",
+                        "--max-time",
+                        "30",
+                        "--user-agent",
+                        UA,
+                        "--url",
+                        url,
+                    ])
+                    .kill_on_drop(true)
+                    .output()
+                    .await?;
+                if !output.status.success() {
+                    bail!(
+                        "ATMB curl request failed (exit {:?}) for {url}",
+                        output.status.code()
+                    );
+                }
+                Ok(String::from_utf8(output.stdout)?)
+            } else {
+                Ok(self
+                    .client
+                    .get(url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .text()
+                    .await?)
+            }
         })
-        .await?)
+        .await
     }
 }
 

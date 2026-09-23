@@ -105,7 +105,7 @@ impl UspsClient {
         UspsResult::status("network_error")
     }
 }
-fn form_fields(address: &Address) -> Option<[(&str, &str); 8]> {
+fn form_fields(address: &Address) -> Option<[(&str, &str); 7]> {
     Some([
         ("companyName", ""),
         ("address1", &address.line1),
@@ -114,7 +114,6 @@ fn form_fields(address: &Address) -> Option<[(&str, &str); 8]> {
         ("state", state_code(&address.state)?),
         ("urbanCode", ""),
         ("zip", &address.zip),
-        ("zip4", ""),
     ])
 }
 fn field(value: &Value, names: &[&str]) -> String {

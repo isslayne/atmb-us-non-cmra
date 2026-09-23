@@ -58,6 +58,7 @@ jobs:
         run: cargo build --release --locked
       - name: Fetch and validate addresses
         env:
+          ATMB_HTTP_BACKEND: curl
           ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
           USPS_ENABLED: ${{ github.event_name != 'workflow_dispatch' || inputs.usps_enabled }}
           USPS_INTERVAL_MS: ${{ inputs.usps_interval_ms || '1000' }}

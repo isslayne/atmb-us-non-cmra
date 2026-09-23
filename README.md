@@ -45,7 +45,7 @@ USPS 网站接口可能返回重定向、限流或非 JSON 页面。程序记录
 
 ## 本地运行
 
-安装 Rust stable。复制 `.env.example` 为 `.env`，填入自己的凭据（`.env` 已忽略），然后执行：
+安装 Rust stable。本地默认使用 reqwest；Actions 使用 Runner 自带的 curl 访问 ATMB，以兼容源站的 HTTP 客户端限制。也可在本地设置 `ATMB_HTTP_BACKEND=curl`（需安装 curl）。复制 `.env.example` 为 `.env`，填入自己的凭据（`.env` 已忽略），然后执行：
 
 ```sh
 set -a
