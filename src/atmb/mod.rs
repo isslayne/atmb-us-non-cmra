@@ -1,6 +1,6 @@
 use crate::atmb::model::Mailbox;
 use crate::atmb::page::{CountryPage, LocationDetailPage, StatePage};
-use crate::config::Scope;
+use crate::config::{bounded_env, Scope};
 use crate::utils::retry_wrapper;
 use color_eyre::eyre::{bail, eyre};
 use futures::StreamExt;
@@ -20,6 +20,7 @@ const US_HOME_PAGE_URL: &str = "/l/usa";
 struct ATMBClient {
     client: Client,
     use_curl: bool,
+    interval: std::time::Duration,
 }
 
 impl ATMBClient {
@@ -34,6 +35,12 @@ impl ATMBClient {
         };
         Ok(Self {
             use_curl,
+            interval: std::time::Duration::from_millis(bounded_env(
+                "ATMB_INTERVAL_MS",
+                1500,
+                0,
+                60_000,
+            )? as u64),
             client: Client::builder()
                 .default_headers(Self::default_headers())
                 .timeout(std::time::Duration::from_secs(60))
@@ -60,6 +67,9 @@ impl ATMBClient {
             .query_pairs()
             .any(|(key, _)| key == "_atmb_refresh");
         retry_wrapper(3, || async {
+            // Sequential requests can still burst on low-latency hosted runners.
+            // Pace every request, including cache-refresh and transport retries.
+            tokio::time::sleep(self.interval).await;
             if self.use_curl {
                 let mut command = tokio::process::Command::new("curl");
                 if revalidate {
@@ -275,6 +285,9 @@ mod live_tests {
         assert!(mailboxes
             .iter()
             .all(|m| Scope::TaxFreeNv.includes(&m.address.state)));
+        assert!(mailboxes
+            .iter()
+            .any(|m| crate::config::state_code(&m.address.state) == Some("NV")));
         assert!(mailboxes.iter().all(|m| m.detail_status == "fetched"));
         assert!(mailboxes.iter().all(|m| !m.address.line1.is_empty()));
         println!(

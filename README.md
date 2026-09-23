@@ -62,6 +62,8 @@ Linux 有界面模式需要显示环境（例如 Xvfb）；`USPS_ENABLED=false` 
 
 如 Chrome 安装于非标准位置，可设置 `USPS_BROWSER_EXECUTABLE`。
 
+ATMB 的每次请求（含重试）默认等待 1500 ms，可用 `ATMB_INTERVAL_MS` 调整。只限制并发数还不够：低延迟的云端 Runner 即使顺序请求也会形成高频突发，导致源站返回缓存的目录重定向。
+
 本地默认使用 reqwest；Actions 使用 Runner 自带的 curl 访问 ATMB，以兼容源站的 HTTP 客户端限制。也可在本地设置 `ATMB_HTTP_BACKEND=curl`（需安装 curl）。复制 `.env.example` 为 `.env`，填入自己的凭据（`.env` 已忽略），然后执行：
 
 ```sh
