@@ -1,0 +1,6 @@
+name,street,street2,city,state,zip,price,link,rdi,CMRA,smarty_status,detail_status,usps_status,usps_address,usps_zip5,usps_zip4,usps_dpv_confirmation,usps_cmra,usps_business,usps_carrier_route,usps_raw
+Bozeman - 22nd Ave,1800 S 22nd Ave,Ste 120,Bozeman,MT,59718,US$14.99/month,https://www.anytimemailbox.com/s/bozeman-1800-s-22nd-avenue,Residential,N,matched,fetched,skipped_after_service_errors,,,,,,,,
+Dover - Governors Ave,1272 S Governors Ave,,Dover,DE,19904,US$9.99/month,https://www.anytimemailbox.com/s/dover-1272-s-governors-ave,Commercial,N,matched,fetched,skipped_after_service_errors,,,,,,,,
+Kalispell,175 Hutton Ranch Rd,Ste 102-,Kalispell,MT,59901,US$9.99/month,https://www.anytimemailbox.com/s/kalispell-175-hutton-ranch-road,Commercial,N,matched,fetched,skipped_after_service_errors,,,,,,,,
+Gearhart,3095 HW 101 N,Ste 11,Gearhart,OR,97138,US$9.99/month,https://www.anytimemailbox.com/s/gearhart-3095-hw-101-n,Commercial,N,matched,fetched,skipped_after_service_errors,,,,,,,,
+Grants Pass - 6th St,1051 NE 6th St,"Ste C,",Grants Pass,OR,97526,US$9.75/month,https://www.anytimemailbox.com/s/grants-pass-1051-ne-6th-street,Commercial,N,matched,fetched,skipped_after_service_errors,,,,,,,,
