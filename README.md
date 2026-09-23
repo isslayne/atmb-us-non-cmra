@@ -40,6 +40,8 @@ ATMB 并发抓取详情时会返回跳到 `/locations` 的 302 或没有地址�
 
 CSV 包含原地址、独立的 `street2`、价格、链接、Smarty `rdi` / `CMRA` / `smarty_status`，以及 USPS 的 `usps_status`、标准化地址、ZIP5 / ZIP4、DPV confirmation、CMRA、business、carrier route 和完整响应 JSON（`usps_raw`）。USPS 实际响应的 CMRA 字段名为 `cmar`，程序读取后写入 `usps_cmra`。USPS 未返回的字段留空，不根据其他字段推断。多个匹配记录以 `multiple_matches` 标记，完整候选保留在 JSON 中。
 
+USPS 返回 `ADDRESS NOT FOUND` 且候选列表为空时，记为 `no_match`：查询已完成，但未找到地址，不属于服务故障，也不等于地址验证通过。原始响应仍完整保留。
+
 USPS 默认启动独立的普通 Chrome，使用全新临时配置、正常窗口和默认浏览器上下文，通过网页表单提交；不读取或复用用户的 Chrome 配置、Cookie。仅增加调试连接以驱动表单，调试端口和可选代理转发均只绑定 `127.0.0.1`，查询结束后关闭浏览器并删除临时配置。原来的直接 POST 和 Playwright 隔离上下文可收到 302，即使同一地址在普通 Chrome 查询成功；延长等待、切换 User-Agent 或代理不能稳定修复。遇到 302 时，程序重建一次临时会话并重试**同一个地址**，仍失败则如实保留错误，绝不把重定向当作查询结果。
 
 Actions 分为 Linux 抓取 ATMB / 查询 Smarty、Windows 补充 USPS、成功后发布三个任务。Windows 任务只读取本次运行的 CSV，不重复查询 Smarty，也不接收 Smarty 凭据。可选 `USPS_PROXY` Secret 支持 HTTP / HTTPS 代理（可带账号密码）；代理凭据由进程内部转发，不放入 Chrome 命令行。USPS 网页使用 `POST https://tools.usps.com/tools/app/ziplookup/zipByAddress`，按 `application/x-www-form-urlencoded` 提交 `companyName`、`address1`、`address2`、`city`、`state`、`urbanCode`、`zip` 等字段。`state` 始终是两位缩写；实际套房 / 单元号保留在 `address2`，未分配的 `YOUR NAME` / `MAILBOX` 占位符不发送。

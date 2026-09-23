@@ -230,6 +230,19 @@ fn parse_response(value: Value) -> UspsResult {
         ..UspsResult::default()
     };
     let status = field(&value, &["resultStatus"]);
+    if status.eq_ignore_ascii_case("ADDRESS NOT FOUND") {
+        result.status = if value
+            .get("addressList")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            "no_match"
+        } else {
+            "invalid_response"
+        }
+        .into();
+        return result;
+    }
     if !status.eq_ignore_ascii_case("SUCCESS") {
         result.status = "lookup_failed".into();
         return result;
@@ -266,6 +279,21 @@ fn parse_response(value: Value) -> UspsResult {
     result.carrier_route = field(address, &["carrierRoute"]);
     result
 }
+
+#[cfg(test)]
+mod no_match_tests {
+    use super::*;
+    #[test]
+    fn address_not_found_is_a_completed_lookup_not_an_outage() {
+        let result = parse_response(
+            serde_json::from_str(include_str!("../tests/fixtures/usps-no-match.json")).unwrap(),
+        );
+        assert_eq!(result.status, "no_match");
+        assert!(!result.service_error());
+        assert!(result.cmra.is_empty());
+        assert!(result.raw.contains("ADDRESS NOT FOUND"));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +311,7 @@ mod tests {
                 zip4: None,
             })
             .await;
+        client.close().await;
         println!("USPS status: {}; raw: {}", result.status, result.raw);
         assert_eq!(result.status, "matched");
     }
