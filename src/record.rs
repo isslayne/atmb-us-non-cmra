@@ -76,7 +76,9 @@ impl Record {
         }
     }
     pub fn non_cmra(&self) -> bool {
-        self.detail_status == "fetched" && self.smarty_status == "matched" && self.cmra == "N"
+        matches!(self.detail_status.as_str(), "fetched" | "listing_fallback")
+            && self.smarty_status == "matched"
+            && self.cmra == "N"
     }
     pub fn sort_key(&self) -> (u8, &str, &str, &str) {
         (
@@ -122,6 +124,11 @@ mod tests {
             UspsResult::status("http_302"),
         );
         assert!(record.non_cmra());
+        record.detail_status = "listing_fallback".into();
+        assert!(
+            record.non_cmra(),
+            "A verified listing address must not be silently dropped"
+        );
         record.cmra = "Unknown".into();
         assert!(!record.non_cmra());
         record.cmra = "Y".into();

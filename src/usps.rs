@@ -16,6 +16,9 @@ impl BrowserWorker {
     fn start() -> color_eyre::Result<Self> {
         let mut child = tokio::process::Command::new("node")
             .arg("scripts/usps-browser.mjs")
+            .env_remove("CREDENTIALS")
+            .env_remove("SMARTY_AUTH_ID")
+            .env_remove("SMARTY_AUTH_TOKEN")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

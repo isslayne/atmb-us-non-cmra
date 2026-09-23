@@ -2,7 +2,7 @@ use crate::{
     atmb::ATMBCrawl,
     config::{bounded_env, Scope},
     record::Record,
-    smarty::{AdditionalInfo, SmartyClient},
+    smarty::SmartyClient,
     usps::{UspsClient, UspsResult},
 };
 use color_eyre::eyre::bail;
@@ -52,12 +52,6 @@ async fn run() -> color_eyre::Result<()> {
         info!("Checking #{}: {}", index + 1, mailbox.name);
         if mailbox.detail_status != "fetched" {
             detail_errors += 1;
-            records.push(Record::new(
-                mailbox,
-                AdditionalInfo::error("skipped_detail_unavailable"),
-                UspsResult::status("skipped_detail_unavailable"),
-            ));
-            continue;
         }
         let smarty_info = smarty.inquire(&mailbox.address).await;
         let usps_info = if usps_enabled {
@@ -84,7 +78,7 @@ async fn run() -> color_eyre::Result<()> {
     let non_cmra = records.iter().filter(|r| r.non_cmra()).count();
     let mut summary = format!("# Address check: {}\n\n- Checked: {}\n- Smarty non-CMRA: {}\n- Smarty errors: {}\n- USPS errors/unavailable: {}\n- Limited smoke test: {}\n\nFull per-address results, including USPS fields and raw JSON, are in `checks.csv`. USPS failures are not validation passes.\n", scope.name(), records.len(), non_cmra, smarty_errors, usps_errors, max_addresses > 0);
     summary.push_str(&format!(
-        "\n- Unavailable detail pages (validation skipped): {detail_errors}\n"
+        "\n- State-listing addresses used (detail enrichment unavailable): {detail_errors}\n"
     ));
     for (service, statuses) in [
         (
@@ -129,9 +123,6 @@ async fn run() -> color_eyre::Result<()> {
     }
     if usps_errors > 0 {
         log::warn!("USPS unavailable for {usps_errors} addresses; see usps_status and usps_raw");
-    }
-    if detail_errors == records.len() {
-        bail!("All detail pages unavailable; publication blocked");
     }
     if smarty_errors > 0 {
         bail!("Smarty failed for {smarty_errors} addresses; partial results saved for diagnosis, publication blocked");
