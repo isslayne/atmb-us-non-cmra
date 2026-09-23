@@ -122,7 +122,7 @@ async fn run() -> color_eyre::Result<()> {
             .write_all(summary.as_bytes())?;
     }
     if usps_errors > 0 {
-        log::warn!("USPS unavailable for {usps_errors} addresses; see usps_status and usps_raw");
+        bail!("USPS unavailable for {usps_errors} addresses; partial results saved for diagnosis, publication blocked");
     }
     if smarty_errors > 0 {
         bail!("Smarty failed for {smarty_errors} addresses; partial results saved for diagnosis, publication blocked");

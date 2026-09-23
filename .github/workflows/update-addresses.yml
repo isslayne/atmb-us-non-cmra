@@ -44,7 +44,7 @@ concurrency:
 
 jobs:
   update:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
@@ -61,7 +61,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chrome
       - name: Test
         run: cargo test --locked
       - name: Build
@@ -69,6 +69,8 @@ jobs:
       - name: Fetch and validate addresses
         env:
           USPS_BACKEND: browser
+          USPS_CHANNEL: chrome
+          USPS_HEADLESS: 'false'
           ATMB_HTTP_BACKEND: curl
           ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
           USPS_ENABLED: ${{ github.event_name != 'workflow_dispatch' || inputs.usps_enabled }}

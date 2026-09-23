@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 
 const PAGE = 'https://tools.usps.com/zip-code-lookup.htm?byaddress';
 const ENDPOINT = 'https://tools.usps.com/tools/app/ziplookup/zipByAddress';
-let browser, context, page;
+let browser, context, page, ready = false;
 async function initialize() {
   if (browser) return;
   browser = await chromium.launch({ headless: process.env.USPS_HEADLESS !== 'false', ...(process.env.USPS_CHANNEL ? { channel: process.env.USPS_CHANNEL } : {}), ...(process.env.USPS_PROXY ? { proxy: { server: process.env.USPS_PROXY } } : {}) });
@@ -16,31 +16,41 @@ async function initialize() {
 async function lookup(address) {
   try {
     await initialize();
-    await page.goto(PAGE, { waitUntil: 'load', timeout: 45000 });
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-    if (process.argv.includes('--smoke')) console.error('Scripts:', await page.locator('script[src]').evaluateAll(nodes => nodes.map(n=>n.src).filter(u=>u.startsWith('https://tools.usps.com/'))));
+    if (!ready) {
+      await page.goto(PAGE, { waitUntil: 'load', timeout: 45000 });
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      ready = true;
+    } else if (!(await page.locator('#tAddress').isVisible())) {
+      await page.locator('#search-address-again').click();
+    }
     await page.locator('#tAddress').fill(address.line1);
     await page.locator('#tApt').fill(address.line2 || '');
     await page.locator('#tCity').fill(address.city);
     await page.locator('#tState').selectOption(address.state);
     await page.locator('#tZip-byaddress').fill(address.zip);
-    const responsePromise = page.waitForResponse(r => r.url() === ENDPOINT && r.request().method() === 'POST', { timeout: 30000 });
-    await page.locator('#zip-by-address').click();
-    const response = await responsePromise;
-    if (process.argv.includes('--smoke')) console.error('Request header names:', Object.keys(await response.request().allHeaders()).join(', '));
+    const [response] = await Promise.all([
+      page.waitForResponse(r => r.url() === ENDPOINT && r.request().method() === 'POST', { timeout: 30000 }),
+      page.locator('#zip-by-address').click(),
+    ]);
     if (response.status() !== 200) return { error: `http_${response.status()}`, http_status: response.status(), redirect: response.headers().location || '' };
     const result = await response.json();
     if (typeof result.resultStatus !== 'string') return { error: 'invalid_response' };
     return { result };
   } catch (error) {
+    ready = false;
     return { error: error.name === 'TimeoutError' ? 'browser_timeout' : 'browser_error' };
   }
 }
 if (process.argv.includes('--smoke')) {
   try {
-    const response = await lookup({ line1: '5953 Mabel Rd', line2: 'unit-236', city: 'Las Vegas', state: 'NV', zip: '89110' });
-    console.log(JSON.stringify(response));
-    if (response.result?.resultStatus !== 'SUCCESS' || !response.result.addressList?.length) process.exitCode = 1;
+    for (const address of [
+      { line1: '5953 Mabel Rd', line2: 'unit-236', city: 'Las Vegas', state: 'NV', zip: '89110' },
+      { line1: '243 E 5th Ave', line2: '', city: 'Anchorage', state: 'AK', zip: '99501' },
+    ]) {
+      const response = await lookup(address);
+      console.log(JSON.stringify(response));
+      if (response.result?.resultStatus !== 'SUCCESS' || !response.result.addressList?.length) process.exitCode = 1;
+    }
   } finally { await browser?.close(); }
 } else {
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
