@@ -1,0 +1,7 @@
+{
+  "name": "atmb-usps-browser",
+  "private": true,
+  "type": "module",
+  "dependencies": {"playwright": "1.63.0"},
+  "scripts": {"test:usps-live": "node scripts/usps-browser.mjs --smoke"}
+}

@@ -52,12 +52,23 @@ jobs:
           ref: dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install USPS browser
+        if: github.event_name != 'workflow_dispatch' || inputs.usps_enabled
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
       - name: Test
         run: cargo test --locked
       - name: Build
         run: cargo build --release --locked
       - name: Fetch and validate addresses
         env:
+          USPS_BACKEND: browser
           ATMB_HTTP_BACKEND: curl
           ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
           USPS_ENABLED: ${{ github.event_name != 'workflow_dispatch' || inputs.usps_enabled }}

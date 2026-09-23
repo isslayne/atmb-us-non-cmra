@@ -1,7 +1,46 @@
 use crate::{atmb::model::Address, config::state_code};
 use reqwest::Client;
 use serde_json::Value;
-use std::time::Duration;
+use std::{process::Stdio, time::Duration};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, ChildStdout},
+};
+
+struct BrowserWorker {
+    _child: Child,
+    input: ChildStdin,
+    output: BufReader<ChildStdout>,
+}
+impl BrowserWorker {
+    fn start() -> color_eyre::Result<Self> {
+        let mut child = tokio::process::Command::new("node")
+            .arg("scripts/usps-browser.mjs")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()?;
+        let input = child.stdin.take().unwrap();
+        let output = BufReader::new(child.stdout.take().unwrap());
+        Ok(Self {
+            _child: child,
+            input,
+            output,
+        })
+    }
+    async fn inquire(&mut self, address: &Address) -> color_eyre::Result<Value> {
+        let input = serde_json::json!({ "line1":address.line1,"line2":address.line2,"city":address.city,"state":state_code(&address.state),"zip":address.zip });
+        self.input
+            .write_all(format!("{input}\n").as_bytes())
+            .await?;
+        self.input.flush().await?;
+        let mut output = String::new();
+        tokio::time::timeout(Duration::from_secs(120), self.output.read_line(&mut output))
+            .await??;
+        Ok(serde_json::from_str(&output)?)
+    }
+}
 
 const ENDPOINT: &str = "https://tools.usps.com/tools/app/ziplookup/zipByAddress";
 #[derive(Debug, Default)]
@@ -32,12 +71,24 @@ impl UspsResult {
 }
 pub struct UspsClient {
     client: Client,
+    browser_mode: bool,
+    browser: Option<BrowserWorker>,
     interval: Duration,
     consecutive_errors: usize,
 }
 impl UspsClient {
     pub fn new(interval_ms: usize) -> color_eyre::Result<Self> {
+        let browser_mode = match std::env::var("USPS_BACKEND")
+            .unwrap_or_else(|_| "browser".into())
+            .as_str()
+        {
+            "browser" => true,
+            "http" => false,
+            _ => color_eyre::eyre::bail!("USPS_BACKEND must be browser or http"),
+        };
         Ok(Self {
+            browser_mode,
+            browser: None,
             client: Client::builder()
                 .timeout(Duration::from_secs(20))
                 .redirect(reqwest::redirect::Policy::none())
@@ -52,13 +103,48 @@ impl UspsClient {
             return UspsResult::status("skipped_after_service_errors");
         }
         tokio::time::sleep(self.interval).await;
-        let result = self.request(address).await;
+        let result = if self.browser_mode {
+            self.browser_request(address).await
+        } else {
+            self.request(address).await
+        };
         if result.service_error() {
             self.consecutive_errors += 1;
         } else {
             self.consecutive_errors = 0;
         }
         result
+    }
+    async fn browser_request(&mut self, address: &Address) -> UspsResult {
+        if state_code(&address.state).is_none() {
+            return UspsResult::status("invalid_state");
+        }
+        if self.browser.is_none() {
+            match BrowserWorker::start() {
+                Ok(worker) => self.browser = Some(worker),
+                Err(_) => return UspsResult::status("browser_start_failed"),
+            }
+        }
+        match self.browser.as_mut().unwrap().inquire(address).await {
+            Ok(response) => {
+                if let Some(result) = response.get("result") {
+                    parse_response(result.clone())
+                } else {
+                    let mut result = UspsResult::status(
+                        response
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("browser_error"),
+                    );
+                    result.raw = response.to_string();
+                    result
+                }
+            }
+            Err(_) => {
+                self.browser = None;
+                UspsResult::status("browser_worker_failed")
+            }
+        }
     }
     async fn request(&self, address: &Address) -> UspsResult {
         let Some(form) = form_fields(address) else {
@@ -166,7 +252,7 @@ fn parse_response(value: Value) -> UspsResult {
     result.zip5 = field(address, &["zip5"]);
     result.zip4 = field(address, &["zip4"]);
     result.dpv_confirmation = field(address, &["DPVConfirmation", "dpvConfirmation"]);
-    result.cmra = field(address, &["DPVCMRA", "dpvCmra"]);
+    result.cmra = field(address, &["cmar", "DPVCMRA", "dpvCmra"]);
     result.business = field(address, &["business"]);
     result.carrier_route = field(address, &["carrierRoute"]);
     result
@@ -174,6 +260,15 @@ fn parse_response(value: Value) -> UspsResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_actual_browser_response_cmra() {
+        let value =
+            serde_json::from_str(include_str!("../tests/fixtures/usps-success.json")).unwrap();
+        let result = parse_response(value);
+        assert_eq!(result.status, "matched");
+        assert_eq!(result.cmra, "Y");
+        assert_eq!(result.zip4, "5026");
+    }
     #[test]
     fn form_preserves_unit_and_normalizes_state() {
         let address = Address {

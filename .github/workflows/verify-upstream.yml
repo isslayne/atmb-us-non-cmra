@@ -1,0 +1,21 @@
+name: Verify upstream address queries
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  usps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Verify USPS sample through normal browser form
+        run: xvfb-run --auto-servernum npm run test:usps-live
+        env:
+          USPS_HEADLESS: 'false'

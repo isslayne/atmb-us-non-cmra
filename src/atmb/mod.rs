@@ -2,7 +2,7 @@ use crate::atmb::model::Mailbox;
 use crate::atmb::page::{CountryPage, LocationDetailPage, StatePage};
 use crate::config::Scope;
 use crate::utils::retry_wrapper;
-use color_eyre::eyre::bail;
+use color_eyre::eyre::{bail, eyre};
 use futures::StreamExt;
 use log::info;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
@@ -36,7 +36,7 @@ impl ATMBClient {
             use_curl,
             client: Client::builder()
                 .default_headers(Self::default_headers())
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()?,
         })
     }
@@ -69,7 +69,7 @@ impl ATMBClient {
                         "--proto-redir",
                         "=https",
                         "--max-time",
-                        "30",
+                        "60",
                         "--user-agent",
                         UA,
                         "--url",
@@ -168,8 +168,8 @@ impl ATMBCrawl {
                     mailbox.address.line2 = detail.line2.unwrap_or_default();
                     mailbox.detail_status = "fetched".into();
                 }
-                Err(_) => {
-                    log::warn!("Detail unavailable for {}; keeping listing in checks.csv and skipping validation", mailbox.link);
+                Err(error) => {
+                    log::warn!("Detail unavailable for {}: {error}; keeping listing in checks.csv and skipping validation", mailbox.link);
                     mailbox.detail_status = "unavailable".into();
                 }
             }
@@ -192,8 +192,13 @@ impl ATMBCrawl {
                         state_html_info.name()
                     );
                     async move {
-                        let state_html = self.client.fetch_page(state_html_info.url()).await?;
-                        StatePage::parse_html(&state_html)
+                        let url = format!("{}{}", BASE_URL, state_html_info.url());
+                        fetch_parsed_with_refresh(
+                            &url,
+                            |url| async move { self.client.fetch_page(&url).await },
+                            StatePage::parse_html,
+                        )
+                        .await
                     }
                 })
                 // limit concurrent requests to 5
@@ -225,8 +230,12 @@ impl ATMBCrawl {
         &self,
         mailbox_link: &str,
     ) -> color_eyre::Result<LocationDetailPage> {
-        let html = self.client.fetch_page(mailbox_link).await?;
-        LocationDetailPage::parse_html(&html)
+        fetch_parsed_with_refresh(
+            mailbox_link,
+            |url| async move { self.client.fetch_page(&url).await },
+            LocationDetailPage::parse_html,
+        )
+        .await
     }
 }
 
@@ -246,6 +255,7 @@ mod live_tests {
     #[tokio::test]
     #[ignore = "Fetches live ATMB pages, but does not consume Smarty quota"]
     async fn crawl_all_tax_free_details() {
+        let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
         let mailboxes = ATMBCrawl::new()
             .unwrap()
             .fetch(Scope::TaxFree, 0)
@@ -254,7 +264,10 @@ mod live_tests {
         assert!(mailboxes
             .iter()
             .all(|m| Scope::TaxFree.includes(&m.address.state)));
-        assert!(mailboxes.iter().any(|m| m.detail_status == "fetched"));
+        assert!(
+            mailboxes.iter().all(|m| m.detail_status == "fetched"),
+            "Every listed tax-free address must have usable details"
+        );
         println!(
             "Tax-free: {} listings, {} available details",
             mailboxes.len(),
@@ -263,5 +276,71 @@ mod live_tests {
                 .filter(|m| m.detail_status == "fetched")
                 .count()
         );
+    }
+}
+
+async fn fetch_parsed_with_refresh<F, Fut, P, T>(
+    url: &str,
+    mut fetch: F,
+    parse: P,
+) -> color_eyre::Result<T>
+where
+    P: Fn(&str) -> color_eyre::Result<T>,
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = color_eyre::Result<String>>,
+{
+    let mut last_error = eyre!("No detail response");
+    for attempt in 0..3 {
+        let request_url = if attempt == 0 {
+            url.to_owned()
+        } else {
+            let mut refreshed = reqwest::Url::parse(url)?;
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            refreshed
+                .query_pairs_mut()
+                .append_pair("_atmb_refresh", &format!("{nonce}-{attempt}"));
+            refreshed.to_string()
+        };
+        let result = match fetch(request_url).await {
+            Ok(html) => parse(&html),
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(detail) => return Ok(detail),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+#[cfg(test)]
+mod detail_retry_tests {
+    use super::*;
+    #[tokio::test]
+    async fn cached_directory_redirect_is_refreshed() {
+        let mut calls = 0;
+        let result = fetch_parsed_with_refresh(
+            "https://www.anytimemailbox.com/s/example",
+            |url| {
+                calls += 1;
+                if calls == 1 {
+                    std::future::ready(Ok("<html>Location directory</html>".to_owned()))
+                } else {
+                    assert!(url.contains("_atmb_refresh="));
+                    std::future::ready(Ok(
+                        include_str!("../../tests/fixtures/detail.html").to_owned()
+                    ))
+                }
+            },
+            LocationDetailPage::parse_html,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "cached redirects must not discard a valid address"
+        );
+        assert_eq!(calls, 2);
     }
 }
