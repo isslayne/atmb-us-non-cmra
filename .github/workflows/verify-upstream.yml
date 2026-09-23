@@ -9,6 +9,7 @@ jobs:
     env:
       USPS_HEADLESS: 'false'
       USPS_CHANNEL: chrome
+      USPS_PROXY: ${{ secrets.USPS_PROXY }}
     steps:
       - uses: actions/checkout@v7
         with:

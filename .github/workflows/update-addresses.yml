@@ -23,6 +23,10 @@ on:
         description: 'Smoke-test limit; 0 = all selected addresses. Limited runs do not commit results.'
         type: string
         default: '0'
+      usps_proxy_secret:
+        description: 'Optional Secret NAME containing a USPS browser proxy URL; leave default if unused'
+        type: string
+        default: 'USPS_PROXY'
       resume_run_id:
         description: 'Optional previous dev run ID: reuse its complete Smarty CSV when ATMB is unavailable'
         type: string
@@ -146,6 +150,7 @@ jobs:
         env:
           USPS_INPUT_CSV: input/checks.csv
           USPS_ENABLED: 'true'
+          USPS_PROXY: ${{ secrets[inputs.usps_proxy_secret || 'USPS_PROXY'] }}
           USPS_BACKEND: browser
           USPS_CHANNEL: chrome
           USPS_HEADLESS: 'false'

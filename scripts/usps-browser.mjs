@@ -6,9 +6,18 @@ import { createInterface } from 'node:readline';
 const PAGE = 'https://tools.usps.com/zip-code-lookup.htm?byaddress';
 const ENDPOINT = 'https://tools.usps.com/tools/app/ziplookup/zipByAddress';
 let browser, context, page, ready = false;
+function proxyConfig() {
+  if (!process.env.USPS_PROXY) return undefined;
+  const url = new URL(process.env.USPS_PROXY);
+  const username = decodeURIComponent(url.username);
+  const password = decodeURIComponent(url.password);
+  url.username = '';
+  url.password = '';
+  return { server: url.origin, ...(username ? { username, password } : {}) };
+}
 async function initialize() {
   if (browser) return;
-  browser = await chromium.launch({ headless: process.env.USPS_HEADLESS !== 'false', ...(process.env.USPS_CHANNEL ? { channel: process.env.USPS_CHANNEL } : {}), ...(process.env.USPS_PROXY ? { proxy: { server: process.env.USPS_PROXY } } : {}) });
+  browser = await chromium.launch({ headless: process.env.USPS_HEADLESS !== 'false', ...(process.env.USPS_CHANNEL ? { channel: process.env.USPS_CHANNEL } : {}), proxy: proxyConfig() });
   context = await browser.newContext({ locale: 'en-US' });
   page = await context.newPage();
   page.setDefaultTimeout(20000);

@@ -12,6 +12,7 @@
 | `usps_enabled` | `true` | 是否查询 USPS |
 | `usps_interval_ms` | `1000` | USPS 请求间隔，单位毫秒 |
 | `max_addresses` | `0` | 0 表示完整运行；正整数仅抽取前 N 个地址进行测试，不提交结果 |
+| `usps_proxy_secret` | `USPS_PROXY` | 可选代理 URL 所在的 Secret 名称；未配置时直接连接。用于托管 Runner 持续被 USPS 重定向的情况。 |
 | `resume_run_id` | 空 | ATMB 暂时不可用时，可输入之前 dev 运行的 ID，复用完整且 Smarty 无错误的地址 CSV，仅重新检查 USPS；Summary 明确标记不是本次新抓取。定时任务仍默认重新抓取。 |
 | `credentials_secret` | `CREDENTIALS` | 存放多账号凭据的仓库 Secret **名称**，可留空使用默认名称 |
 | `smarty_auth_id_secret` | `SMARTY_AUTH_ID` | 存放 auth ID 的仓库 Secret **名称** |
@@ -38,7 +39,7 @@ ATMB 部分详情链接存在缓存的目录页重定向。程序遇到错误或
 
 CSV 包含原地址、独立的 `street2`、价格、链接、Smarty `rdi` / `CMRA` / `smarty_status`，以及 USPS 的 `usps_status`、标准化地址、ZIP5 / ZIP4、DPV confirmation、CMRA、business、carrier route 和完整响应 JSON（`usps_raw`）。USPS 实际响应的 CMRA 字段名为 `cmar`，程序读取后写入 `usps_cmra`。USPS 未返回的字段留空，不根据其他字段推断。多个匹配记录以 `multiple_matches` 标记，完整候选保留在 JSON 中。
 
-USPS 默认通过独立 Chrome 会话打开正常查询页面、填写表单，由 USPS 网页自身脚本发出请求；不读取用户浏览器的 Cookie 或配置。Actions 分为 Linux 抓取 ATMB / 查询 Smarty、Windows 补充 USPS、成功后发布三个任务。Windows 任务只读取本次运行的 CSV，不重复查询 Smarty，也不接收 Smarty 凭据。USPS 使用 Windows Runner + 有界面 Chrome（已通过多地址实时测试；macOS / Linux 托管环境可能仍收到 302）。直接 HTTP POST 缺少网站初始化的会话，请求可能被重定向到错误页，即使相同地址在浏览器可查询。网页使用 `POST https://tools.usps.com/tools/app/ziplookup/zipByAddress`，无鉴权，按 `application/x-www-form-urlencoded` 提交 `companyName`、`address1`、`address2`、`city`、`state`、`urbanCode`、`zip` 等字段。`state` 始终是两位缩写；实际套房 / 单元号保留在 `address2`，未分配的 `YOUR NAME` / `MAILBOX` 占位符不发送。
+USPS 默认通过独立 Chrome 会话打开正常查询页面、填写表单，由 USPS 网页自身脚本发出请求；不读取用户浏览器的 Cookie 或配置。Actions 分为 Linux 抓取 ATMB / 查询 Smarty、Windows 补充 USPS、成功后发布三个任务。Windows 任务只读取本次运行的 CSV，不重复查询 Smarty，也不接收 Smarty 凭据。USPS 使用 Windows Runner + 有界面 Chrome。样本测试曾成功，但实测不同托管 Runner 仍可能持续收到 302；切换操作系统不能保证可用。遇到这种情况可配置 `USPS_PROXY` Secret（HTTP / HTTPS 代理 URL，可包含账号密码），通过可访问 USPS 的网络出口运行。直接 HTTP POST 缺少网站初始化的会话，请求可能被重定向到错误页，即使相同地址在浏览器可查询。网页使用 `POST https://tools.usps.com/tools/app/ziplookup/zipByAddress`，无鉴权，按 `application/x-www-form-urlencoded` 提交 `companyName`、`address1`、`address2`、`city`、`state`、`urbanCode`、`zip` 等字段。`state` 始终是两位缩写；实际套房 / 单元号保留在 `address2`，未分配的 `YOUR NAME` / `MAILBOX` 占位符不发送。
 
 USPS 网站接口可能返回重定向、限流或非 JSON 页面。程序记录 `http_XXX` / `invalid_json` / `network_error` 等状态；连续三次服务错误后，其余地址标记 `skipped_after_service_errors`，避免持续请求不可用服务。USPS 任务失败后可使用 Actions 的 Re-run failed jobs 重试，无需再次查询 Smarty。USPS 不可用时仍生成诊断 CSV，但工作流失败并阻止覆盖已发布结果；Summary 会显示不可用数量。**USPS 查询匹配不代表非 CMRA；失败或未知也不代表通过。** Smarty 返回 `http_402_subscription_required` 表示账号缺少此 API 的有效订阅，需要在 Smarty 账号中开通 / 恢复订阅，或在 Actions 中选择其他凭据 Secret 后重跑。Smarty 服务错误时保留诊断文件并让 Actions 失败，不发布部分结果。
 
