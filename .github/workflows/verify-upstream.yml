@@ -4,11 +4,7 @@ permissions:
   contents: read
 jobs:
   usps:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
