@@ -92,6 +92,13 @@ async fn run() -> color_eyre::Result<()> {
     )?;
     let non_cmra = records.iter().filter(|r| r.non_cmra()).count();
     let mut summary = format!("# Address check: {}\n\n- Checked: {}\n- Smarty non-CMRA: {}\n- Smarty errors: {}\n- USPS errors/unavailable: {}\n- Limited smoke test: {}\n\nFull per-address results, including USPS fields and raw JSON, are in `checks.csv`. USPS failures are not validation passes.\n", scope.name(), records.len(), non_cmra, smarty_errors, usps_errors, max_addresses > 0);
+    if let Ok(source) = std::env::var("SOURCE_RUN_ID") {
+        if !source.is_empty() && source.chars().all(|c| c.is_ascii_digit()) {
+            summary.push_str(&format!(
+                "\n- ATMB / Smarty data reused from prior run: {source} (not a fresh crawl)\n"
+            ));
+        }
+    }
     summary.push_str(&format!(
         "\n- State-listing addresses used (detail enrichment unavailable): {detail_errors}\n"
     ));

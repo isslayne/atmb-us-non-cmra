@@ -12,6 +12,7 @@
 | `usps_enabled` | `true` | 是否查询 USPS |
 | `usps_interval_ms` | `1000` | USPS 请求间隔，单位毫秒 |
 | `max_addresses` | `0` | 0 表示完整运行；正整数仅抽取前 N 个地址进行测试，不提交结果 |
+| `resume_run_id` | 空 | ATMB 暂时不可用时，可输入之前 dev 运行的 ID，复用完整且 Smarty 无错误的地址 CSV，仅重新检查 USPS；Summary 明确标记不是本次新抓取。定时任务仍默认重新抓取。 |
 | `credentials_secret` | `CREDENTIALS` | 存放多账号凭据的仓库 Secret **名称**，可留空使用默认名称 |
 | `smarty_auth_id_secret` | `SMARTY_AUTH_ID` | 存放 auth ID 的仓库 Secret **名称** |
 | `smarty_auth_token_secret` | `SMARTY_AUTH_TOKEN` | 存放 auth token 的仓库 Secret **名称** |

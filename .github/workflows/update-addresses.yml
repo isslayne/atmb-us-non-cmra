@@ -23,6 +23,10 @@ on:
         description: 'Smoke-test limit; 0 = all selected addresses. Limited runs do not commit results.'
         type: string
         default: '0'
+      resume_run_id:
+        description: 'Optional previous dev run ID: reuse its complete Smarty CSV when ATMB is unavailable'
+        type: string
+        default: ''
       credentials_secret:
         description: 'Optional repository Secret NAME containing ID=TOKEN,ID2=TOKEN2 (takes precedence)'
         type: string
@@ -38,6 +42,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: update-us-addresses-dev
   cancel-in-progress: false
@@ -45,6 +50,7 @@ concurrency:
 env:
   ADDRESS_SCOPE: ${{ inputs.address_scope || 'tax-free' }}
   MAX_ADDRESSES: ${{ inputs.max_addresses || '0' }}
+  SOURCE_RUN_ID: ${{ inputs.resume_run_id }}
   RESULT_DIR: result/${{ inputs.max_addresses != '' && inputs.max_addresses != '0' && 'smoke/' || '' }}${{ inputs.address_scope || 'tax-free' }}
 
 jobs:
@@ -60,8 +66,32 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test --locked
+        if: inputs.resume_run_id == ''
       - run: cargo build --release --locked
+        if: inputs.resume_run_id == ''
+      - name: Resume previously checked addresses
+        if: inputs.resume_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        run: |
+          [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$(gh run view "$RESUME_RUN_ID" --json headBranch --jq .headBranch)" == dev ]] || exit 1
+          rm -rf -- "$RESULT_DIR"
+          gh run download "$RESUME_RUN_ID" --name "smarty-$RESUME_RUN_ID" --dir "$RESULT_DIR" ||
+            gh run download "$RESUME_RUN_ID" --name "addresses-$ADDRESS_SCOPE-$RESUME_RUN_ID" --dir "$RESULT_DIR"
+          python3 - <<'PYTHON'
+          import os, pathlib
+          summary = (pathlib.Path(os.environ['RESULT_DIR']) / 'summary.md').read_text()
+          if not summary.startswith('# Address check: ' + os.environ['ADDRESS_SCOPE'] + '\n'):
+              raise SystemExit('Source scope does not match')
+          if '- Limited smoke test: false' not in summary:
+              raise SystemExit('Cannot resume a limited sample as a complete dataset')
+          if '- Smarty errors: 0' not in summary:
+              raise SystemExit('Source Smarty validation is incomplete')
+          PYTHON
       - name: Fetch ATMB and validate with Smarty
+        if: inputs.resume_run_id == ''
         env:
           ATMB_HTTP_BACKEND: curl
           USPS_ENABLED: 'false'
