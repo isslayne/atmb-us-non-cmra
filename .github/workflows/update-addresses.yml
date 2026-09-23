@@ -79,6 +79,7 @@ jobs:
           path: ${{ env.RESULT_DIR }}/
           if-no-files-found: ignore
           retention-days: 30
+          overwrite: true
 
   usps:
     needs: fetch
@@ -128,6 +129,7 @@ jobs:
           path: ${{ env.RESULT_DIR }}/
           if-no-files-found: ignore
           retention-days: 30
+          overwrite: true
 
   publish:
     permissions:
