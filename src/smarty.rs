@@ -80,7 +80,7 @@ impl SmartyClient {
                 }
             }
         }
-        AdditionalInfo::error("quota_exhausted")
+        AdditionalInfo::error("http_402_subscription_required")
     }
 }
 impl AdditionalInfo {

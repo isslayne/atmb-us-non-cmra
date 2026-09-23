@@ -25,4 +25,5 @@ pub struct Mailbox {
     pub address: Address,
     pub link: String,
     pub price: String,
+    pub detail_status: String,
 }

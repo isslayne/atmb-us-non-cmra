@@ -2,7 +2,7 @@ use crate::{
     atmb::ATMBCrawl,
     config::{bounded_env, Scope},
     record::Record,
-    smarty::SmartyClient,
+    smarty::{AdditionalInfo, SmartyClient},
     usps::{UspsClient, UspsResult},
 };
 use color_eyre::eyre::bail;
@@ -47,8 +47,18 @@ async fn run() -> color_eyre::Result<()> {
     let mut records = Vec::new();
     let mut smarty_errors = 0;
     let mut usps_errors = 0;
+    let mut detail_errors = 0;
     for (index, mailbox) in mailboxes.into_iter().enumerate() {
         info!("Checking #{}: {}", index + 1, mailbox.name);
+        if mailbox.detail_status != "fetched" {
+            detail_errors += 1;
+            records.push(Record::new(
+                mailbox,
+                AdditionalInfo::error("skipped_detail_unavailable"),
+                UspsResult::status("skipped_detail_unavailable"),
+            ));
+            continue;
+        }
         let smarty_info = smarty.inquire(&mailbox.address).await;
         let usps_info = if usps_enabled {
             usps.inquire(&mailbox.address).await
@@ -72,7 +82,43 @@ async fn run() -> color_eyre::Result<()> {
         &format!("{out_dir}/mailboxes.csv"),
     )?;
     let non_cmra = records.iter().filter(|r| r.non_cmra()).count();
-    let summary = format!("# Address check: {}\n\n- Checked: {}\n- Smarty non-CMRA: {}\n- Smarty errors: {}\n- USPS errors/unavailable: {}\n- Limited smoke test: {}\n\nFull per-address results, including USPS fields and raw JSON, are in `checks.csv`. USPS failures are not validation passes.\n", scope.name(), records.len(), non_cmra, smarty_errors, usps_errors, max_addresses > 0);
+    let mut summary = format!("# Address check: {}\n\n- Checked: {}\n- Smarty non-CMRA: {}\n- Smarty errors: {}\n- USPS errors/unavailable: {}\n- Limited smoke test: {}\n\nFull per-address results, including USPS fields and raw JSON, are in `checks.csv`. USPS failures are not validation passes.\n", scope.name(), records.len(), non_cmra, smarty_errors, usps_errors, max_addresses > 0);
+    summary.push_str(&format!(
+        "\n- Unavailable detail pages (validation skipped): {detail_errors}\n"
+    ));
+    for (service, statuses) in [
+        (
+            "Smarty",
+            records
+                .iter()
+                .map(|r| r.smarty_status.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "USPS",
+            records
+                .iter()
+                .map(|r| r.usps_status.as_str())
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        let mut counts = std::collections::BTreeMap::new();
+        for status in statuses {
+            *counts.entry(status).or_insert(0) += 1;
+        }
+        summary.push_str(&format!(
+            "\n## {service} statuses\n\n| Status | Count |\n| --- | --- |\n"
+        ));
+        for (status, count) in counts {
+            summary.push_str(&format!("| {status} | {count} |\n"));
+        }
+    }
+    if records
+        .iter()
+        .any(|r| r.smarty_status == "http_402_subscription_required")
+    {
+        summary.push_str("\nSmarty returned HTTP 402: activate a US Street Address API subscription or select another credential Secret, then rerun.\n");
+    }
     std::fs::write(format!("{out_dir}/summary.md"), &summary)?;
     if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
         std::fs::OpenOptions::new()
@@ -83,6 +129,9 @@ async fn run() -> color_eyre::Result<()> {
     }
     if usps_errors > 0 {
         log::warn!("USPS unavailable for {usps_errors} addresses; see usps_status and usps_raw");
+    }
+    if detail_errors == records.len() {
+        bail!("All detail pages unavailable; publication blocked");
     }
     if smarty_errors > 0 {
         bail!("Smarty failed for {smarty_errors} addresses; partial results saved for diagnosis, publication blocked");
@@ -115,7 +164,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("atmb-empty-{}.csv", std::process::id()));
         save_records(std::iter::empty(), path.to_str().unwrap()).unwrap();
         let mut reader = csv::Reader::from_path(&path).unwrap();
-        assert_eq!(reader.headers().unwrap().len(), 20);
+        assert_eq!(reader.headers().unwrap().len(), 21);
         assert_eq!(reader.records().count(), 0);
         std::fs::remove_file(path).unwrap();
     }

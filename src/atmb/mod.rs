@@ -2,7 +2,7 @@ use crate::atmb::model::Mailbox;
 use crate::atmb::page::{CountryPage, LocationDetailPage, StatePage};
 use crate::config::Scope;
 use crate::utils::retry_wrapper;
-use color_eyre::eyre::{bail, eyre};
+use color_eyre::eyre::bail;
 use futures::StreamExt;
 use log::info;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
@@ -114,60 +114,26 @@ impl ATMBCrawl {
             mailboxes.truncate(max_addresses);
         }
         // Visit detail pages only after filtering and applying the optional smoke-test limit.
-        self.update_street2_for_mailbox(mailboxes)
-            .await
-            .map_err(|e| eyre!("Some mailbox's detail cannot be fetched: {:?}", e))
+        Ok(self.update_street2_for_mailbox(mailboxes).await)
     }
 
-    async fn update_street2_for_mailbox(
-        &self,
-        mailboxes: Vec<Mailbox>,
-    ) -> color_eyre::Result<Vec<Mailbox>> {
-        let total_mailboxes = mailboxes.len();
-
-        let mailboxes = futures::stream::iter(mailboxes)
-            .enumerate()
-            .map(|(idx, mut mailbox)| {
-                let link = mailbox.link.clone();
-                async move {
-                    let fut = || async {
-                        info!(
-                            "[{}/{}] fetching the detail page of [{}]...",
-                            idx + 1,
-                            total_mailboxes,
-                            mailbox.name
-                        );
-                        let detail_page = self.fetch_location_detail_page(&mailbox.link).await?;
-                        mailbox.address.line1 = detail_page.line1;
-                        mailbox.address.line2 = detail_page.line2.unwrap_or_default();
-                        Result::<_, color_eyre::eyre::Error>::Ok(mailbox)
-                    };
-                    fut().await.map_err(|err| {
-                        let err = eyre!("cannot fetch detail page for: [{}]: {:?}", link, err);
-                        log::error!("{:?}", err);
-                        err
-                    })
+    async fn update_street2_for_mailbox(&self, mailboxes: Vec<Mailbox>) -> Vec<Mailbox> {
+        let total = mailboxes.len();
+        futures::stream::iter(mailboxes).enumerate().map(|(idx, mut mailbox)| async move {
+            info!("[{}/{}] fetching detail: {}", idx + 1, total, mailbox.name);
+            match self.fetch_location_detail_page(&mailbox.link).await {
+                Ok(detail) => {
+                    mailbox.address.line1 = detail.line1;
+                    mailbox.address.line2 = detail.line2.unwrap_or_default();
+                    mailbox.detail_status = "fetched".into();
                 }
-            })
-            .buffer_unordered(10)
-            .collect::<Vec<_>>()
-            .await;
-
-        let (suc_list, err_list): (Vec<_>, Vec<_>) = mailboxes.into_iter().partition(Result::is_ok);
-        let suc_list = suc_list
-            .into_iter()
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
-        let err_list = err_list
-            .into_iter()
-            .filter_map(Result::err)
-            .collect::<Vec<_>>();
-
-        if !err_list.is_empty() {
-            bail!("{:#?}", err_list);
-        } else {
-            Ok(suc_list)
-        }
+                Err(_) => {
+                    log::warn!("Detail unavailable for {}; keeping listing in checks.csv and skipping validation", mailbox.link);
+                    mailbox.detail_status = "unavailable".into();
+                }
+            }
+            mailbox
+        }).buffer_unordered(5).collect().await
     }
 
     async fn fetch_state_pages(
@@ -220,5 +186,41 @@ impl ATMBCrawl {
     ) -> color_eyre::Result<LocationDetailPage> {
         let html = self.client.fetch_page(mailbox_link).await?;
         LocationDetailPage::parse_html(&html)
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "Fetches live ATMB pages, but does not consume Smarty quota"]
+    async fn crawl_all_state_listings() {
+        let mailboxes = ATMBCrawl::new()
+            .unwrap()
+            .fetch(Scope::All, 1)
+            .await
+            .unwrap();
+        assert_eq!(mailboxes.len(), 1);
+    }
+    #[tokio::test]
+    #[ignore = "Fetches live ATMB pages, but does not consume Smarty quota"]
+    async fn crawl_all_tax_free_details() {
+        let mailboxes = ATMBCrawl::new()
+            .unwrap()
+            .fetch(Scope::TaxFree, 0)
+            .await
+            .unwrap();
+        assert!(mailboxes
+            .iter()
+            .all(|m| Scope::TaxFree.includes(&m.address.state)));
+        assert!(mailboxes.iter().any(|m| m.detail_status == "fetched"));
+        println!(
+            "Tax-free: {} listings, {} available details",
+            mailboxes.len(),
+            mailboxes
+                .iter()
+                .filter(|m| m.detail_status == "fetched")
+                .count()
+        );
     }
 }

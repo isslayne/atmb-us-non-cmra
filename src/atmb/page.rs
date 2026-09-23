@@ -286,6 +286,7 @@ impl TryInto<Mailbox> for LocationHtmlInfo {
             price: self.price(),
             name: self.name,
             link: self.link,
+            detail_status: "pending".into(),
         })
     }
 }

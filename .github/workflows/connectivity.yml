@@ -1,0 +1,20 @@
+name: Diagnose source connectivity
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check HTTP access
+        shell: bash
+        run: |
+          for agent in 'curl/8.0' 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' 'atmb-us-non-cmra/0.1 (+https://github.com/isslayne/atmb-us-non-cmra)'; do
+            echo "Testing agent: $agent"
+            curl -sS -L --max-time 30 -A "$agent" -D /tmp/headers.txt 'https://www.anytimemailbox.com/l/usa' -o /tmp/page.html -w '%{http_code}\n' || true
+            head -c 300 /tmp/page.html
+            echo
+          done

@@ -84,7 +84,12 @@ impl UspsClient {
                         continue;
                     }
                     if !status.is_success() {
-                        return UspsResult::status(format!("http_{}", status.as_u16()));
+                        let mut result = UspsResult::status(format!("http_{}", status.as_u16()));
+                        result.raw = serde_json::json!({
+                            "http_status": status.as_u16(),
+                            "redirect": response.headers().get("location").and_then(|v| v.to_str().ok()),
+                        }).to_string();
+                        return result;
                     }
                     return match response.json::<Value>().await {
                         Ok(value) => parse_response(value),

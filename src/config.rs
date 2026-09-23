@@ -1,7 +1,7 @@
 use color_eyre::eyre::{bail, eyre};
 
 pub const TAX_FREE_STATES: [&str; 5] = ["AK", "DE", "MT", "NH", "OR"];
-pub const STATES: [(&str, &str); 51] = [
+pub const STATES: [(&str, &str); 57] = [
     ("Alabama", "AL"),
     ("Alaska", "AK"),
     ("Arizona", "AZ"),
@@ -53,6 +53,12 @@ pub const STATES: [(&str, &str); 51] = [
     ("West Virginia", "WV"),
     ("Wisconsin", "WI"),
     ("Wyoming", "WY"),
+    ("American Samoa", "AS"),
+    ("Guam", "GU"),
+    ("Northern Mariana Islands", "MP"),
+    ("Puerto Rico", "PR"),
+    ("US Virgin Islands", "VI"),
+    ("US Minor Outlying Islands", "UM"),
 ];
 
 pub fn state_code(value: &str) -> Option<&'static str> {
@@ -115,6 +121,8 @@ mod tests {
         assert!(Scope::TaxFree.includes("Oregon"));
         assert!(!Scope::TaxFree.includes("NV"));
         assert!(Scope::All.includes("Nevada"));
+        assert!(Scope::All.includes("Guam"));
+        assert!(!Scope::TaxFree.includes("PR"));
         assert!(!Scope::All.includes("Ontario"));
         assert_eq!(state_code(" nevada "), Some("NV"));
         assert!(Scope::parse("typo").is_err());

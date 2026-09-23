@@ -8,7 +8,7 @@
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `address_scope` | `tax-free` | `tax-free`：AK、DE、MT、NH、OR；`all`：美国 50 州及 DC 的可用地址 |
+| `address_scope` | `tax-free` | `tax-free`：AK、DE、MT、NH、OR；`all`：美国各州、DC 及属地的可用地址 |
 | `usps_enabled` | `true` | 是否查询 USPS |
 | `usps_interval_ms` | `1000` | USPS 请求间隔，单位毫秒 |
 | `max_addresses` | `0` | 0 表示完整运行；正整数仅抽取前 N 个地址进行测试，不提交结果 |
@@ -33,11 +33,13 @@ GitHub 要求定时工作流位于默认分支，因此此仓库应将 **`dev` �
 - Actions Artifacts：CSV 和统计，保留 30 天；失败运行有已生成结果时也会上传供排查。限量测试结果只在 `result/smoke/` 和 Artifact 中。
 - 原 `result/mailboxes.csv` 是历史结果，不再更新；请使用上述分目录输出。
 
+部分旧详情链接会重定向到目录页。此类地址保留在 `checks.csv`，以 `detail_status=unavailable` 标记，并跳过 Smarty / USPS 查询，不进入优选清单；其他地址照常处理。所有详情页均不可用时阻止发布。
+
 CSV 包含原地址、独立的 `street2`、价格、链接、Smarty `rdi` / `CMRA` / `smarty_status`，以及 USPS 的 `usps_status`、标准化地址、ZIP5 / ZIP4、DPV confirmation、CMRA、business、carrier route 和完整响应 JSON（`usps_raw`）。USPS 未返回的字段留空，不根据其他字段推断。多个匹配记录以 `multiple_matches` 标记，完整候选保留在 JSON 中。
 
 USPS 使用 `POST https://tools.usps.com/tools/app/ziplookup/zipByAddress`，无鉴权，按 `application/x-www-form-urlencoded` 提交 `companyName`、`address1`、`address2`、`city`、`state`、`urbanCode`、`zip` 等字段。`state` 始终是两位缩写；实际套房 / 单元号保留在 `address2`，未分配的 `YOUR NAME` / `MAILBOX` 占位符不发送。
 
-USPS 网站接口可能返回重定向、限流或非 JSON 页面。程序记录 `http_XXX` / `invalid_json` / `network_error` 等状态；连续三次服务错误后，其余地址标记 `skipped_after_service_errors`，避免持续请求不可用服务。USPS 不可用不会中止 Smarty 结果生成，Summary 会显示不可用数量。**USPS 查询匹配不代表非 CMRA；失败或未知也不代表通过。** Smarty 服务错误时保留诊断文件并让 Actions 失败，不发布部分结果。
+USPS 网站接口可能返回重定向、限流或非 JSON 页面。程序记录 `http_XXX` / `invalid_json` / `network_error` 等状态；连续三次服务错误后，其余地址标记 `skipped_after_service_errors`，避免持续请求不可用服务。USPS 不可用不会中止 Smarty 结果生成，Summary 会显示不可用数量。**USPS 查询匹配不代表非 CMRA；失败或未知也不代表通过。** Smarty 返回 `http_402_subscription_required` 表示账号缺少此 API 的有效订阅，需要在 Smarty 账号中开通 / 恢复订阅，或在 Actions 中选择其他凭据 Secret 后重跑。Smarty 服务错误时保留诊断文件并让 Actions 失败，不发布部分结果。
 
 这里的“免税州”指没有州级一般销售税的五州，不代表所有交易都免税；例如 Alaska 可能有地方销售税。[税制范围说明](https://taxfoundation.org/data/all/state/sales-tax-rates-2025/)
 
