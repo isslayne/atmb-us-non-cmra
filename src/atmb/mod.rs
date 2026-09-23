@@ -181,7 +181,7 @@ impl ATMBCrawl {
 
     async fn update_street2_for_mailbox(&self, mailboxes: Vec<Mailbox>) -> Vec<Mailbox> {
         let total = mailboxes.len();
-        futures::stream::iter(mailboxes).enumerate().map(|(idx, mut mailbox)| async move {
+        let mut mailboxes: Vec<Mailbox> = futures::stream::iter(mailboxes).enumerate().map(|(idx, mut mailbox)| async move {
             info!("[{}/{}] fetching detail: {}", idx + 1, total, mailbox.name);
             match self.fetch_location_detail_page(&mailbox.link).await {
                 Ok(detail) => {
@@ -190,12 +190,37 @@ impl ATMBCrawl {
                     mailbox.detail_status = "fetched".into();
                 }
                 Err(error) => {
-                    log::warn!("Detail fetch failed for {}: {error}; using the published state-listing address for validation (this does not mean the location is unavailable)", mailbox.link);
+                    log::warn!("Initial detail fetch failed for {}: {error}; queued for a later retry (this does not mean the location is unavailable)", mailbox.link);
                     mailbox.detail_status = "listing_fallback".into();
                 }
             }
             mailbox
-        }).buffer_unordered(1).collect().await
+        }).buffer_unordered(1).collect().await;
+        // Immediate retries can all hit the same transient origin failure. Revisit
+        // only missing details after the first pass, before querying Smarty/USPS.
+        for round in 1..=2 {
+            let pending = mailboxes
+                .iter()
+                .filter(|m| m.detail_status != "fetched")
+                .count();
+            if pending == 0 {
+                break;
+            }
+            info!("Retrying {pending} detail pages after cooldown (round {round}/2)");
+            tokio::time::sleep(std::time::Duration::from_secs(15 * round)).await;
+            for mailbox in mailboxes
+                .iter_mut()
+                .filter(|m| m.detail_status != "fetched")
+            {
+                if let Ok(detail) = self.fetch_location_detail_page(&mailbox.link).await {
+                    mailbox.address.line1 = detail.line1;
+                    mailbox.address.line2 = detail.line2.unwrap_or_default();
+                    mailbox.detail_status = "fetched".into();
+                    info!("Recovered detail: {}", mailbox.name);
+                }
+            }
+        }
+        mailboxes
     }
 
     async fn fetch_state_pages(
