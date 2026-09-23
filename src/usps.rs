@@ -263,6 +263,23 @@ fn parse_response(value: Value) -> UspsResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    #[ignore = "Queries the live USPS website through the Rust-to-browser bridge"]
+    async fn live_browser_bridge() {
+        let mut client = UspsClient::new(1000).unwrap();
+        let result = client
+            .inquire(&Address {
+                line1: "5953 Mabel Rd".into(),
+                line2: "unit-236".into(),
+                city: "Las Vegas".into(),
+                state: "NV".into(),
+                zip: "89110".into(),
+                zip4: None,
+            })
+            .await;
+        println!("USPS status: {}; raw: {}", result.status, result.raw);
+        assert_eq!(result.status, "matched");
+    }
     #[test]
     fn parses_actual_browser_response_cmra() {
         let value =
